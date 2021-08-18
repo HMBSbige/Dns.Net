@@ -7,6 +7,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Dns.Net", "Dns.Net\Dns.Net.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dns.Net.Abstractions", "Dns.Net.Abstractions\Dns.Net.Abstractions.csproj", "{7E603BE1-9056-4749-B26B-D756595828D6}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UnitTest", "UnitTest\UnitTest.csproj", "{AC1DD5CF-145C-4FB6-9285-4F3ECE3EE7AA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{7E603BE1-9056-4749-B26B-D756595828D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7E603BE1-9056-4749-B26B-D756595828D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7E603BE1-9056-4749-B26B-D756595828D6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC1DD5CF-145C-4FB6-9285-4F3ECE3EE7AA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC1DD5CF-145C-4FB6-9285-4F3ECE3EE7AA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC1DD5CF-145C-4FB6-9285-4F3ECE3EE7AA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC1DD5CF-145C-4FB6-9285-4F3ECE3EE7AA}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
