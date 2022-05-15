@@ -1,12 +1,9 @@
 using System.Net;
-using System.Threading;
-using System.Threading.Tasks;
 
-namespace Dns.Net.Abstractions
+namespace Dns.Net.Abstractions;
+
+public interface IDnsClient
 {
-	public interface IDnsClient
-	{
-		ValueTask<IPAddress> QueryAsync(string hostname, CancellationToken cancellationToken = default);
-		IPAddress Query(string hostname);
-	}
+	ValueTask<IPAddress> QueryAsync(string hostname, CancellationToken cancellationToken = default);
+	IPAddress Query(string hostname);
 }

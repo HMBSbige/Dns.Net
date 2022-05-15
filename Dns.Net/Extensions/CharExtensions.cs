@@ -1,40 +1,37 @@
-using System;
+namespace Dns.Net.Extensions;
 
-namespace Dns.Net.Extensions
+public static class CharExtensions
 {
-	public static class CharExtensions
+	public static bool IsAscii(this char ch)
 	{
-		public static bool IsAscii(this char ch)
-		{
-			return (uint)ch <= '\x007f';
-		}
+		return (uint)ch <= '\x007f';
+	}
 
-		public static bool IsAsciiDigit(this char ch)
-		{
-			return ch is >= '0' and <= '9';
-		}
+	public static bool IsAsciiDigit(this char ch)
+	{
+		return ch is >= '0' and <= '9';
+	}
 
-		public static bool IsAsciiLetter(this char ch)
-		{
-			return ch is >= 'a' and <= 'z' or >= 'A' and <= 'Z';
-		}
+	public static bool IsAsciiLetter(this char ch)
+	{
+		return ch is >= 'a' and <= 'z' or >= 'A' and <= 'Z';
+	}
 
-		public static bool IsPrintable(this char ch)
-		{
-			return !char.IsControl(ch) && !char.IsWhiteSpace(ch);
-		}
+	public static bool IsPrintable(this char ch)
+	{
+		return !char.IsControl(ch) && !char.IsWhiteSpace(ch);
+	}
 
-		public static bool IsAscii(this ReadOnlySpan<char> str)
+	public static bool IsAscii(this ReadOnlySpan<char> str)
+	{
+		foreach (char ch in str)
 		{
-			foreach (var ch in str)
+			if (!ch.IsAscii())
 			{
-				if (!ch.IsAscii())
-				{
-					return false;
-				}
+				return false;
 			}
-
-			return true;
 		}
+
+		return true;
 	}
 }
