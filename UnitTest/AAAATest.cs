@@ -20,9 +20,6 @@ public class AAAATest
 
 		IPAddress ip = client.Query(ipStr);
 		Assert.AreEqual(expected, ip);
-
-		ip = client.Query(@"dns.msftncsi.com");
-		Assert.AreEqual(expected, ip);
 	}
 
 	[TestMethod]
@@ -36,9 +33,6 @@ public class AAAATest
 		IPAddress expected = IPAddress.Parse(ipStr);
 
 		IPAddress ip = await client.QueryAsync(ipStr);
-		Assert.AreEqual(expected, ip);
-
-		ip = await client.QueryAsync(@"dns.msftncsi.com");
 		Assert.AreEqual(expected, ip);
 	}
 }
