@@ -9,7 +9,11 @@
     <File Path="NuGet.Config" />
     <File Path="README.md" />
   </Folder>
-  <Project Path="Dns.Net.Abstractions/Dns.Net.Abstractions.csproj" />
-  <Project Path="Dns.Net/Dns.Net.csproj" />
-  <Project Path="UnitTest/UnitTest.csproj" />
+  <Folder Name="/src/">
+    <Project Path="src/Dns.Net.Abstractions/Dns.Net.Abstractions.csproj" />
+    <Project Path="src/Dns.Net/Dns.Net.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/UnitTest/UnitTest.csproj" />
+  </Folder>
 </Solution>

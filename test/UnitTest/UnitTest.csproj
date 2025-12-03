@@ -8,7 +8,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Dns.Net\Dns.Net.csproj" />
+    <ProjectReference Include="..\..\src\Dns.Net\Dns.Net.csproj" />
   </ItemGroup>
 
 </Project>
