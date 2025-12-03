@@ -1,6 +1,5 @@
 using Dns.Net.Abstractions;
 using Dns.Net.Clients;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Net;
 
 namespace UnitTest;
@@ -8,6 +7,8 @@ namespace UnitTest;
 [TestClass]
 public class UnitTest
 {
+	public TestContext TestContext { get; set; }
+
 	[TestMethod]
 	public void TestDefault()
 	{
@@ -17,22 +18,22 @@ public class UnitTest
 
 		const string ipStr = @"1.1.1.1";
 		IPAddress ip = client.Query(ipStr);
-		Assert.IsTrue(ip.Equals(IPAddress.Parse(ipStr)));
+		Assert.AreEqual(IPAddress.Parse(ipStr), ip);
 
-		client.Query(@"stun.syncthing.net");
+		client.Query(@"github.com");
 	}
 
 	[TestMethod]
 	public async Task TestDefaultAsync()
 	{
 		IDnsClient client = new DefaultDnsClient();
-		IPAddress localhost = await client.QueryAsync(@"localhost");
+		IPAddress localhost = await client.QueryAsync(@"localhost", TestContext.CancellationToken);
 		Assert.IsTrue(Equals(localhost, IPAddress.Loopback) || Equals(localhost, IPAddress.IPv6Loopback));
 
 		const string ipStr = @"1.1.1.1";
-		IPAddress ip = await client.QueryAsync(ipStr);
-		Assert.IsTrue(ip.Equals(IPAddress.Parse(ipStr)));
+		IPAddress ip = await client.QueryAsync(ipStr, TestContext.CancellationToken);
+		Assert.AreEqual(IPAddress.Parse(ipStr), ip);
 
-		await client.QueryAsync(@"stun.syncthing.net");
+		await client.QueryAsync(@"github.com", TestContext.CancellationToken);
 	}
 }

@@ -1,17 +1,9 @@
 namespace Dns.Net.Abstractions;
 
-public class DnsException : Exception
+public class DnsException(string? message) : Exception(message)
 {
-	public DnsException() { }
-	public DnsException(string? message) : base(message) { }
-
-	public static void Throw(string? message = null)
+	public static void Throw(string? message = default)
 	{
-		if (string.IsNullOrEmpty(message))
-		{
-			throw new DnsException(message);
-		}
-
-		throw new DnsException();
+		throw new DnsException(message);
 	}
 }

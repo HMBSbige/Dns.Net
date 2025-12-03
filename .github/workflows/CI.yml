@@ -1,93 +1,86 @@
 name: CI
 on:
   push:
-    branches:
-      - master
-      - develop
-      - "renovate/**"
     tags:
       - "*"
+    branches:
+      - master
+      - renovate/**
   pull_request:
-  workflow_dispatch:
+env:
+  ProjectName: ${{ github.event.repository.name }}
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  DOTNET_GENERATE_ASPNET_CERTIFICATE: false
+  NET_VERSION: 10.0.x
 
 jobs:
   check_format:
-    name: Check format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 6.0.x
+          dotnet-version: ${{ env.NET_VERSION }}
 
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-
-      - name: Run dotnet format check
+      - name: Check .NET format
         run: dotnet format -v diag --verify-no-changes
 
   test:
-    name: Test
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 6.0.x
+          dotnet-version: ${{ env.NET_VERSION }}
 
       - name: Test
-        shell: pwsh
         run: dotnet test -c Release
 
   build:
-    name: Build
-    needs: [test, check_format]
+    needs: [check_format, test]
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    permissions:
+      packages: write
     strategy:
       matrix:
-        ProjectName: [Dns.Net, Dns.Net.Abstractions]
+        ProjectName:
+          - Dns.Net
+          - Dns.Net.Abstractions
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 6.0.x
+          dotnet-version: ${{ env.NET_VERSION }}
 
       - name: Build
-        shell: pwsh
-        run: dotnet build -c Release ${{ matrix.ProjectName }}\${{ matrix.ProjectName }}.csproj
+        working-directory: src/${{ matrix.ProjectName }}
+        run: dotnet pack
 
       - name: Push nuget packages
-        shell: pwsh
+        working-directory: src/${{ matrix.ProjectName }}/bin/Release
         run: |
-          dotnet nuget push ${{ matrix.ProjectName }}\bin\Release\*.nupkg -s https://nuget.pkg.github.com/HMBSbige -k ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
-          dotnet nuget push ${{ matrix.ProjectName }}\bin\Release\*.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NuGetAPIKey }} --skip-duplicate
+          dotnet nuget push *.nupkg -s https://nuget.pkg.github.com/HMBSbige -k ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
+          dotnet nuget push *.nupkg -s https://api.nuget.org/v3/index.json -k ${{ secrets.NuGetAPIKey }} --skip-duplicate
 
   release:
-    name: Release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
-      - name: Changelog
-        uses: glennawatson/ChangeLog@v1
-        id: changelog
-
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          body: ${{ steps.changelog.outputs.commitLog }}
           draft: false
           prerelease: false

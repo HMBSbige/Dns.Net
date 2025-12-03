@@ -1,6 +1,4 @@
 using Dns.Net;
-using Dns.Net.Domains;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace UnitTest;
 
@@ -18,7 +16,6 @@ public class DomainTest
 	[DataRow(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
 	[DataRow(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.", true)]
 	[DataRow(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
-	[DataRow(@"\000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
 	[DataRow(@"\000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
 	[DataRow(@"\000\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
 	[DataRow(@"\000\a\.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
@@ -58,27 +55,9 @@ public class DomainTest
 		const string rfc4343Domain1 = @"Donald\032E\.\032Eastlake\0323rd.example.";
 		const string rfc4343Domain2 = @"a\000\\\255z.example.";
 
-		ReadOnlySpan<byte> microsoftDomainBuffer = new byte[]
-		{
-			3, (byte)'w', (byte)'w', (byte)'w',
-			9, (byte)'m', (byte)'i', (byte)'c', (byte)'r', (byte)'o', (byte)'s', (byte)'o', (byte)'f', (byte)'t',
-			3, (byte)'c', (byte)'o', (byte)'m',
-			0
-		};
-		ReadOnlySpan<byte> rfc4343Domain1Buffer = new byte[]
-		{
-			22, (byte)'D', (byte)'o', (byte)'n', (byte)'a', (byte)'l', (byte)'d', 32, (byte)'E', (byte)'.', 32,
-			(byte)'E', (byte)'a', (byte)'s', (byte)'t', (byte)'l', (byte)'a', (byte)'k', (byte)'e', 32,
-			(byte)'3', (byte)'r', (byte)'d',
-			7, (byte)'e', (byte)'x', (byte)'a', (byte)'m', (byte)'p', (byte)'l', (byte)'e',
-			0
-		};
-		ReadOnlySpan<byte> rfc4343Domain2Buffer = new byte[]
-		{
-			5, (byte)'a', 0, (byte)'\\', 255, (byte)'z',
-			7, (byte)'e', (byte)'x', (byte)'a', (byte)'m', (byte)'p', (byte)'l', (byte)'e',
-			0
-		};
+		ReadOnlySpan<byte> microsoftDomainBuffer = [3, (byte)'w', (byte)'w', (byte)'w', 9, (byte)'m', (byte)'i', (byte)'c', (byte)'r', (byte)'o', (byte)'s', (byte)'o', (byte)'f', (byte)'t', 3, (byte)'c', (byte)'o', (byte)'m', 0];
+		ReadOnlySpan<byte> rfc4343Domain1Buffer = [22, (byte)'D', (byte)'o', (byte)'n', (byte)'a', (byte)'l', (byte)'d', 32, (byte)'E', (byte)'.', 32, (byte)'E', (byte)'a', (byte)'s', (byte)'t', (byte)'l', (byte)'a', (byte)'k', (byte)'e', 32, (byte)'3', (byte)'r', (byte)'d', 7, (byte)'e', (byte)'x', (byte)'a', (byte)'m', (byte)'p', (byte)'l', (byte)'e', 0];
+		ReadOnlySpan<byte> rfc4343Domain2Buffer = [5, (byte)'a', 0, (byte)'\\', 255, (byte)'z', 7, (byte)'e', (byte)'x', (byte)'a', (byte)'m', (byte)'p', (byte)'l', (byte)'e', 0];
 
 		Span<byte> buffer = stackalloc byte[DnsConstants.MaxDomainSize];
 

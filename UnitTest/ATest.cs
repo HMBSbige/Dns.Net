@@ -1,6 +1,5 @@
 using Dns.Net.Abstractions;
 using Dns.Net.Clients;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Net;
 
 namespace UnitTest;
@@ -8,6 +7,8 @@ namespace UnitTest;
 [TestClass]
 public class ATest
 {
+	public TestContext TestContext { get; set; }
+
 	[TestMethod]
 	public void TestDefault()
 	{
@@ -29,16 +30,16 @@ public class ATest
 	public async Task TestDefaultAsync()
 	{
 		IDnsClient client = new DefaultAClient();
-		IPAddress localhost = await client.QueryAsync(@"localhost");
+		IPAddress localhost = await client.QueryAsync(@"localhost", TestContext.CancellationToken);
 		Assert.AreEqual(IPAddress.Loopback, localhost);
 
 		const string ipStr = @"131.107.255.255";
 		IPAddress expected = IPAddress.Parse(ipStr);
 
-		IPAddress ip = await client.QueryAsync(ipStr);
+		IPAddress ip = await client.QueryAsync(ipStr, TestContext.CancellationToken);
 		Assert.AreEqual(expected, ip);
 
-		ip = await client.QueryAsync(@"dns.msftncsi.com");
+		ip = await client.QueryAsync(@"dns.msftncsi.com", TestContext.CancellationToken);
 		Assert.AreEqual(expected, ip);
 	}
 }

@@ -1,17 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <Import Project="..\common.props" />
-  
   <PropertyGroup>
+    <IsPackable>true</IsPackable>
     <Description>A DNS library.</Description>
   </PropertyGroup>
-  
-  <ItemGroup>
-    <PackageReference Include="Microsoft.VisualStudio.Validation" Version="17.13.22" />
-  </ItemGroup>
-  
+
   <ItemGroup>
     <ProjectReference Include="..\Dns.Net.Abstractions\Dns.Net.Abstractions.csproj" />
   </ItemGroup>
-  
+
 </Project>
