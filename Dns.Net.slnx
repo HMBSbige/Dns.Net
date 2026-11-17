@@ -1,19 +1,24 @@
 ﻿<Solution>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
-    <File Path=".github/renovate.json" />
-    <File Path=".github/workflows/CI.yml" />
+    <File Path=".gitattributes" />
     <File Path=".gitignore" />
     <File Path="Directory.Build.props" />
     <File Path="LICENSE" />
     <File Path="NuGet.Config" />
     <File Path="README.md" />
+    <File Path=".github\renovate.json" />
+    <File Path=".github\workflows\CI.yml" />
+    <File Path=".github\workflows\release.yml" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
   </Folder>
   <Folder Name="/src/">
-    <Project Path="src/Dns.Net.Abstractions/Dns.Net.Abstractions.csproj" />
-    <Project Path="src/Dns.Net/Dns.Net.csproj" />
+    <File Path="src\Package.props" />
+    <Project Path="src\Dns.Net.Abstractions\Dns.Net.Abstractions.csproj" />
+    <Project Path="src\Dns.Net\Dns.Net.csproj" />
   </Folder>
   <Folder Name="/test/">
-    <Project Path="test/UnitTest/UnitTest.csproj" />
+    <Project Path="test\Dns.Net.Tests\Dns.Net.Tests.csproj" />
   </Folder>
 </Solution>

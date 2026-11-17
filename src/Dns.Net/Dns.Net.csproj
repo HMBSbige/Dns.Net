@@ -1,12 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="../Package.props" />
+
   <PropertyGroup>
     <IsPackable>true</IsPackable>
-    <Description>A DNS library.</Description>
+    <Description>DNS clients for .NET: SystemDnsClient over System.Net.Dns and System.Net.DnsResolver, and DnsClient, which queries over any IDnsTransport, follows CNAME chains and takes negative-cache TTLs from SOA records (RFC 2308).</Description>
+    <PackageTags>dns;dns-client;resolver;srv;mx;txt;ptr;cname</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Dns.Net.Abstractions\Dns.Net.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dns.Net.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
   </ItemGroup>
 
 </Project>
