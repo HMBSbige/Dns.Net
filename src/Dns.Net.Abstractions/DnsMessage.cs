@@ -54,6 +54,7 @@ public sealed record DnsMessage
 	/// <summary>
 	/// Gets the identifier that a response copies from its query (RFC 1035, Sec. 4.1.1).
 	/// </summary>
+	/// <remarks>A transport chooses the identifier on the wire itself; see <see cref="IDnsTransport" />.</remarks>
 	public ushort Id { get; init; }
 
 	/// <summary>
