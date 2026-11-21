@@ -6,9 +6,6 @@ namespace Dns.Net.Tests;
 
 public class DnsErrorResponseTest
 {
-	// example.com A IN, at offsets 12 to 28.
-	private static readonly byte[] Question = [.. Name("example", "com"), 0x00, 0x01, 0x00, 0x01];
-
 	private static readonly DnsQuestion ExampleA = new(DnsName.Parse("example.com"), DnsRecordType.A);
 
 	private static readonly byte[] Opt = Record([0], 41, [], ttl: 0, @class: 1232);

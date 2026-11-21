@@ -156,7 +156,7 @@ public class DnsRecordTest
 		// RFC 1035, Sec. 3.3.14: at least one string, which may be empty.
 		await Assert.That(() => new DnsTxtData([])).ThrowsExactly<ArgumentException>().WithParameterName("Values");
 		await Assert.That(() => new DnsTxtData([ReadOnlyMemory<byte>.Empty]) with { Values = [] }).ThrowsExactly<ArgumentException>().WithParameterName("Values");
-		await Assert.That(new DnsTxtData([ReadOnlyMemory<byte>.Empty]).Values.Count).IsEqualTo(1);
+		await Assert.That(new DnsTxtData([ReadOnlyMemory<byte>.Empty]).Values).HasSingleItem();
 	}
 
 	[Test]
@@ -167,7 +167,7 @@ public class DnsRecordTest
 		DnsTxtData data = new(values);
 		values.Add(new byte[256]);
 
-		await Assert.That(data.Values.Count).IsEqualTo(1);
+		await Assert.That(data.Values).HasSingleItem();
 	}
 
 	[Test]

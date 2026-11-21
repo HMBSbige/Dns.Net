@@ -22,8 +22,8 @@ public class DnsStreamExtensionsTest
 		await stream.WriteDnsMessageAsync(Query, cancellationToken);
 
 		byte[] encoded = Query.Encode();
-		await Assert.That(stream.Writes.Count).IsEqualTo(1);
-		await Assert.That(Convert.ToHexString(stream.Writes[0])).IsEqualTo(Convert.ToHexString([0, (byte)encoded.Length, .. encoded]));
+		byte[] write = await Assert.That(stream.Writes).HasSingleItem();
+		await Assert.That(Convert.ToHexString(write)).IsEqualTo(Convert.ToHexString([0, (byte)encoded.Length, .. encoded]));
 	}
 
 	[Test]
@@ -95,7 +95,7 @@ public class DnsStreamExtensionsTest
 		RecordingStream stream = new();
 
 		await Assert.That(async () => await stream.WriteDnsMessageAsync(new DnsMessage { ResponseCode = (DnsResponseCode)16 })).Throws<InvalidOperationException>();
-		await Assert.That(stream.Writes.Count).IsEqualTo(0);
+		await Assert.That(stream.Writes).IsEmpty();
 	}
 
 	[Test]
@@ -204,7 +204,7 @@ public class DnsStreamExtensionsTest
 		RecordingStream stream = new();
 
 		await Assert.That(() => { _ = stream.WriteDnsFrameAsync(new byte[ushort.MaxValue + 1]); }).ThrowsExactly<ArgumentOutOfRangeException>().WithParameterName("message");
-		await Assert.That(stream.Writes.Count).IsEqualTo(0);
+		await Assert.That(stream.Writes).IsEmpty();
 	}
 
 	[Test]

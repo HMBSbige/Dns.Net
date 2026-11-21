@@ -13,12 +13,12 @@ public class DnsRequestHandlerTest
 
 		DnsMessage? response = await new LoopbackHandler().HandleAsync(context, cancellationToken);
 
-		await Assert.That(response).IsNotNull();
-		await Assert.That(response!.IsResponseTo(request)).IsTrue();
-		await Assert.That(response.IsAuthoritativeAnswer).IsTrue();
-		await Assert.That(response.Answers.Count).IsEqualTo(1);
-		await Assert.That(response.Answers[0].ToString()).IsEqualTo("localhost. 300 IN A 127.0.0.1");
-		await Assert.That(DnsMessage.Decode(response.Encode())).IsEqualTo(response);
+		DnsMessage answered = await Assert.That(response).IsNotNull();
+		await Assert.That(answered.IsResponseTo(request)).IsTrue();
+		await Assert.That(answered.IsAuthoritativeAnswer).IsTrue();
+		DnsResourceRecord answer = await Assert.That(answered.Answers).HasSingleItem();
+		await Assert.That(answer.ToString()).IsEqualTo("localhost. 300 IN A 127.0.0.1");
+		await Assert.That(DnsMessage.Decode(answered.Encode())).IsEqualTo(answered);
 	}
 
 	[Test]
@@ -53,9 +53,9 @@ public class DnsRequestHandlerTest
 
 		DnsMessage? response = await new IdStampingHandler(new LoopbackHandler()).HandleAsync(new DnsRequestContext(request, DnsProtocol.Udp), cancellationToken);
 
-		await Assert.That(response).IsNotNull();
-		await Assert.That(response!.Id).IsEqualTo((ushort)7);
-		await Assert.That(response.IsResponseTo(request)).IsTrue();
+		DnsMessage answered = await Assert.That(response).IsNotNull();
+		await Assert.That(answered.Id).IsEqualTo((ushort)7);
+		await Assert.That(answered.IsResponseTo(request)).IsTrue();
 	}
 
 	[Test]
@@ -153,18 +153,18 @@ public class DnsRequestHandlerTest
 
 		DnsMessage? response = await new QueryOnlyHandler(new LoopbackHandler()).HandleAsync(new DnsRequestContext(request, DnsProtocol.Udp), cancellationToken);
 
-		await Assert.That(response).IsNotNull();
-		await Assert.That(response!.ResponseCode).IsEqualTo(DnsResponseCode.NotImplemented);
-		await Assert.That(response.Opcode).IsEqualTo((DnsOpcode)15);
-		await Assert.That(response.Questions).IsEmpty();
-		await Assert.That(response.Answers).IsEmpty();
-		await Assert.That(response.Authorities).IsEmpty();
-		await Assert.That(response.Additionals).IsEmpty();
-		await Assert.That(response.IsAuthoritativeAnswer).IsFalse();
-		await Assert.That(response.IsRecursionDesired).IsFalse();
-		await Assert.That(response.Edns).IsNull();
-		await Assert.That(response.IsResponseTo(request)).IsTrue();
-		await Assert.That(DnsMessage.Decode(response.Encode())).IsEqualTo(response);
+		DnsMessage notImp = await Assert.That(response).IsNotNull();
+		await Assert.That(notImp.ResponseCode).IsEqualTo(DnsResponseCode.NotImplemented);
+		await Assert.That(notImp.Opcode).IsEqualTo((DnsOpcode)15);
+		await Assert.That(notImp.Questions).IsEmpty();
+		await Assert.That(notImp.Answers).IsEmpty();
+		await Assert.That(notImp.Authorities).IsEmpty();
+		await Assert.That(notImp.Additionals).IsEmpty();
+		await Assert.That(notImp.IsAuthoritativeAnswer).IsFalse();
+		await Assert.That(notImp.IsRecursionDesired).IsFalse();
+		await Assert.That(notImp.Edns).IsNull();
+		await Assert.That(notImp.IsResponseTo(request)).IsTrue();
+		await Assert.That(DnsMessage.Decode(notImp.Encode())).IsEqualTo(notImp);
 	}
 
 	// The QueryOnlyHandler of the README.

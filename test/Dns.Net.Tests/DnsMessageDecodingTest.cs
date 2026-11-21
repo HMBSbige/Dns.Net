@@ -7,8 +7,6 @@ namespace Dns.Net.Tests;
 
 public class DnsMessageDecodingTest
 {
-	private static readonly byte[] Question = [.. Name("example", "com"), 0x00, 0x01, 0x00, 0x01];
-
 	[Test]
 	[Arguments(0x7FFFFFFFu, 2147483647L)]
 	[Arguments(0x80000000u, 2147483648L)]
@@ -39,8 +37,8 @@ public class DnsMessageDecodingTest
 		DnsMessage decoded = DnsMessage.Decode(message);
 
 		await Assert.That(decoded.ResponseCode).IsEqualTo((DnsResponseCode)(1 << 4 | 3));
-		await Assert.That(decoded.Additionals.Count).IsEqualTo(1);
-		await Assert.That(decoded.Additionals[0].Data).IsEqualTo(new DnsAddressData(IPAddress.Parse("192.0.2.1")));
+		DnsResourceRecord additional = await Assert.That(decoded.Additionals).HasSingleItem();
+		await Assert.That(additional.Data).IsEqualTo(new DnsAddressData(IPAddress.Parse("192.0.2.1")));
 		await Assert.That(decoded.Edns).IsEqualTo(new DnsEdns
 		{
 			UdpPayloadSize = 1500,

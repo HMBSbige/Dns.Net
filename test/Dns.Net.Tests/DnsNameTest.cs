@@ -216,12 +216,10 @@ public class DnsNameTest
 	[Arguments(@"\a\(\033\126", @"a\(!~")]
 	[Arguments(@"\127\128\032\009", @"\127\128\032\009")]
 	[Arguments(@"a\\.b", @"a\\.b")]
-	public async Task ToStringEscapesSpecialCharactersAndNonPrintableBytes(string name, string expected)
+	public async Task ToStringEscapesSpecialCharactersAndNonPrintableBytes(DnsName name, string expected)
 	{
-		DnsName parsed = DnsName.Parse(name);
-
-		await Assert.That(parsed.ToString()).IsEqualTo(expected);
-		await Assert.That($"{parsed}").IsEqualTo(expected);
+		await Assert.That(name.ToString()).IsEqualTo(expected);
+		await Assert.That($"{name}").IsEqualTo(expected);
 	}
 
 	[Test]
@@ -289,7 +287,7 @@ public class DnsNameTest
 		await Assert.That(lower != mixed).IsFalse();
 		await Assert.That(lower.Equals((object)mixed)).IsTrue();
 		await Assert.That(lower.GetHashCode()).IsEqualTo(mixed.GetHashCode());
-		await Assert.That(new HashSet<DnsName> { lower, mixed }.Count).IsEqualTo(1);
+		await Assert.That(new HashSet<DnsName> { lower, mixed }).HasSingleItem();
 
 		// Folding every byte with 0x20 would equate these pairs; \192 and \224 are À and à.
 		await Assert.That(DnsName.Parse("@")).IsNotEqualTo(DnsName.Parse("`"));
@@ -316,9 +314,9 @@ public class DnsNameTest
 	[Arguments("example.com", ".", true)]
 	[Arguments(".", ".", true)]
 	[Arguments(".", "com", false)]
-	public async Task IsSubdomainOfComparesWholeTrailingLabels(string name, string ancestor, bool expected)
+	public async Task IsSubdomainOfComparesWholeTrailingLabels(DnsName name, DnsName ancestor, bool expected)
 	{
-		await Assert.That(DnsName.Parse(name).IsSubdomainOf(DnsName.Parse(ancestor))).IsEqualTo(expected);
+		await Assert.That(name.IsSubdomainOf(ancestor)).IsEqualTo(expected);
 	}
 
 	[Test]
@@ -344,9 +342,9 @@ public class DnsNameTest
 	[Arguments(@"Www.Example.COM")]
 	[Arguments(@"a\.b.example")]
 	[Arguments(@"a\032b.\255\255.example")]
-	public async Task TryDecodeReadsWhatTryEncodeWrites(string name)
+	public async Task TryDecodeReadsWhatTryEncodeWrites(DnsName name)
 	{
-		await AssertDecoding(DnsName.Parse(name));
+		await AssertDecoding(name);
 	}
 
 	[Test]

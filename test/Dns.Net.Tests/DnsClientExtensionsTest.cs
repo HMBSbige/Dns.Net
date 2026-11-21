@@ -32,12 +32,12 @@ public class DnsClientExtensionsTest
 	[Arguments("::1", "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa")]
 	[Arguments("::ffff:192.0.2.1", "1.0.2.0.0.0.0.c.f.f.f.f.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa")]
 	[Arguments("fe80::1%3", "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.e.f.ip6.arpa")]
-	public async Task ResolvePtrAsksForTheReverseLookupName(string address, string expected, CancellationToken cancellationToken)
+	public async Task ResolvePtrAsksForTheReverseLookupName(IPAddress address, string expected, CancellationToken cancellationToken)
 	{
 		DnsQueryResult<DnsPtrRecord> canned = new(DnsResponseCode.NoError, [new DnsPtrRecord("host.example.com", TimeSpan.FromSeconds(60))], TimeSpan.Zero);
 		RecordingClient client = new() { Pointers = canned };
 
-		DnsQueryResult<DnsPtrRecord> result = await client.ResolvePtrAsync(IPAddress.Parse(address), cancellationToken);
+		DnsQueryResult<DnsPtrRecord> result = await client.ResolvePtrAsync(address, cancellationToken);
 
 		await Assert.That(result).IsEqualTo(canned);
 		await Assert.That(client.Calls).IsEquivalentTo([(nameof(DnsPtrRecord), expected, AddressFamily.Unknown)], CollectionOrdering.Matching);
@@ -173,9 +173,8 @@ public class DnsClientExtensionsTest
 
 		// Fails through the task, not as an invalid argument.
 		await Assert.That(task.IsFaulted).IsTrue();
-		SocketException? exception = await Assert.That(async () => await task).ThrowsExactly<SocketException>();
+		SocketException? exception = await Assert.That(async () => await task).ThrowsExactly<SocketException>().WithMessageContaining(host);
 		await Assert.That(exception!.SocketErrorCode).IsEqualTo(SocketError.HostNotFound);
-		await Assert.That(exception.Message).Contains(host);
 		await Assert.That(client.Calls).IsEmpty();
 	}
 
@@ -196,9 +195,8 @@ public class DnsClientExtensionsTest
 			ValueTask<IPAddress[]> task = Resolve(client, host, family, osSupportsIPv6: true, cancellationToken);
 
 			await Assert.That(task.IsFaulted).IsTrue();
-			SocketException? exception = await Assert.That(async () => await task).ThrowsExactly<SocketException>();
+			SocketException? exception = await Assert.That(async () => await task).ThrowsExactly<SocketException>().WithMessageContaining(host);
 			await Assert.That(exception!.SocketErrorCode).IsEqualTo(SocketError.HostNotFound);
-			await Assert.That(exception.Message).Contains(host);
 		}
 
 		await Assert.That(client.Calls).IsEmpty();
@@ -434,10 +432,9 @@ public class DnsClientExtensionsTest
 		RecordingClient client = new() { Addresses = new DnsQueryResult<DnsAddressRecord>(responseCode, [], TimeSpan.FromSeconds(30)) };
 
 		ValueTask<IPAddress[]> task = client.GetHostAddressesAsync("host.example.com", AddressFamily.InterNetwork);
-		SocketException? exception = await Assert.That(async () => await task).ThrowsExactly<SocketException>();
+		SocketException? exception = await Assert.That(async () => await task).ThrowsExactly<SocketException>().WithMessageContaining("host.example.com");
 
 		await Assert.That(exception!.SocketErrorCode).IsEqualTo(expected);
-		await Assert.That(exception.Message).Contains("host.example.com");
 		await Assert.That(client.Calls).IsEquivalentTo([("Addresses", "host.example.com", AddressFamily.InterNetwork)], CollectionOrdering.Matching);
 	}
 

@@ -5,6 +5,9 @@ namespace Dns.Net.Tests;
 // Builds wire-format test inputs.
 internal static class Wire
 {
+	// example.com A IN, at offsets 12 to 28 of a message.
+	public static readonly byte[] Question = [.. Name("example", "com"), 0x00, 0x01, 0x00, 0x01];
+
 	public static byte[] U16(int value)
 	{
 		return [(byte)(value >> 8), (byte)value];

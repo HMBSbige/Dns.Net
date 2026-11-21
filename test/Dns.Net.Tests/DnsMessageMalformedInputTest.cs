@@ -6,9 +6,6 @@ namespace Dns.Net.Tests;
 // Each case breaks one rule; a control just within a limit must still decode.
 public class DnsMessageMalformedInputTest
 {
-	// example.com A IN, at offsets 12 to 28.
-	private static readonly byte[] Question = [.. Name("example", "com"), 0x00, 0x01, 0x00, 0x01];
-
 	private static readonly byte[] Address = [192, 0, 2, 1];
 
 	[Test]

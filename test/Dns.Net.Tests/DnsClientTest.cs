@@ -45,13 +45,13 @@ public class DnsClientTest
 			await Assert.That(query.Opcode).IsEqualTo(DnsOpcode.Query);
 			await Assert.That(query.IsRecursionDesired).IsTrue();
 			await Assert.That(query.IsCheckingDisabled).IsFalse();
-			await Assert.That(query.Questions.Count).IsEqualTo(1);
-			await Assert.That(query.Questions[0].Name.ToString()).IsEqualTo("Example.COM");
-			await Assert.That(query.Questions[0].Class).IsEqualTo(DnsClass.Internet);
-			await Assert.That(query.Edns).IsNotNull();
-			await Assert.That(query.Edns!.UdpPayloadSize).IsEqualTo((ushort)1232);
-			await Assert.That(query.Edns.DnssecOk).IsFalse();
-			await Assert.That(query.Edns.Options).IsEmpty();
+			DnsQuestion question = await Assert.That(query.Questions).HasSingleItem();
+			await Assert.That(question.Name.ToString()).IsEqualTo("Example.COM");
+			await Assert.That(question.Class).IsEqualTo(DnsClass.Internet);
+			DnsEdns edns = await Assert.That(query.Edns).IsNotNull();
+			await Assert.That(edns.UdpPayloadSize).IsEqualTo((ushort)1232);
+			await Assert.That(edns.DnssecOk).IsFalse();
+			await Assert.That(edns.Options).IsEmpty();
 			await Assert.That(query.Answers.Count + query.Authorities.Count + query.Additionals.Count).IsEqualTo(0);
 		}
 
@@ -297,7 +297,7 @@ public class DnsClientTest
 		DnsQueryResult<DnsAddressRecord> result = await new DnsClient(transport).ResolveAddressesAsync(Name, AddressFamily.InterNetwork, cancellationToken);
 
 		await Assert.That(result).IsEqualTo(Empty<DnsAddressRecord>(DnsResponseCode.NoError));
-		await Assert.That(transport.Queries.Count).IsEqualTo(1);
+		await Assert.That(transport.Queries).HasSingleItem();
 	}
 
 	[Test]
@@ -577,7 +577,7 @@ public class DnsClientTest
 		DnsQueryResult<FlippingRecord> result = await client.ResolveAsync<FlippingRecord>(Name, cancellationToken);
 
 		await Assert.That(transport.Queries.Single().Questions[0].Type).IsEqualTo(DnsRecordType.Mx);
-		await Assert.That(result.Records.Count).IsEqualTo(1);
+		await Assert.That(result.Records).HasSingleItem();
 	}
 
 	[Test]
@@ -673,8 +673,8 @@ public class DnsClientTest
 
 		_ = await new DnsClient(transport).ResolveAsync<DnsNsRecord>(name, cancellationToken);
 
-		await Assert.That(transport.Queries.Count).IsEqualTo(1);
-		await Assert.That(transport.Queries[0].Questions[0].Name.ToString()).IsEqualTo(expected);
+		DnsMessage query = await Assert.That(transport.Queries).HasSingleItem();
+		await Assert.That(query.Questions[0].Name.ToString()).IsEqualTo(expected);
 	}
 
 	[Test]
@@ -835,10 +835,10 @@ public class DnsClientTest
 	[Arguments("axn--bcher-kva.example", "axn--bcher-kva.example")]
 	[Arguments("Mail.Example.COM", "Mail.Example.COM")]
 	[Arguments(".", ".")]
-	public async Task NamesInAsciiCompatibleEncodingComeBackInUnicode(string exchange, string expected, CancellationToken cancellationToken)
+	public async Task NamesInAsciiCompatibleEncodingComeBackInUnicode(DnsName exchange, string expected, CancellationToken cancellationToken)
 	{
 		// Without the wire format, whose compression may change the case of a shared suffix.
-		DnsClient client = new(new ScriptedTransport(query => query.CreateResponse() with { Answers = [Rr(Name, 60, new DnsMxData(10, N(exchange)))] }, roundTrip: false));
+		DnsClient client = new(new ScriptedTransport(query => query.CreateResponse() with { Answers = [Rr(Name, 60, new DnsMxData(10, exchange))] }, roundTrip: false));
 
 		await Assert.That(await client.ResolveAsync<DnsMxRecord>(Name, cancellationToken)).IsEqualTo(Positive(new DnsMxRecord(expected, 10, Seconds(60))));
 	}

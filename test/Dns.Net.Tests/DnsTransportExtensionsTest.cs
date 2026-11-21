@@ -35,7 +35,7 @@ public class DnsTransportExtensionsTest
 		RecordingTransport transport = new(new DnsMessage());
 
 		await Assert.That(() => { _ = transport.QueryAsync(name, DnsRecordType.A); }).ThrowsExactly<ArgumentException>().WithParameterName("name");
-		await Assert.That(transport.Queries.Count).IsEqualTo(0);
+		await Assert.That(transport.Queries).IsEmpty();
 	}
 
 	[Test]
