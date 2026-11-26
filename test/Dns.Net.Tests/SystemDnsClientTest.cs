@@ -34,9 +34,10 @@ public class SystemDnsClientTest
 	[Test]
 	public async Task PlatformAnnotationsFollowThoseOfTheResolverOfDotNet()
 	{
-		// Neither resolver supports browsers or WASI; System.Net.Dns, used without options, does not support Android.
+		// Neither resolver supports browsers or WASI; without options, Android needs Android 10.
 		await Assert.That(UnsupportedPlatforms(typeof(SystemDnsClient))).IsEquivalentTo(["browser", "wasi"]);
 		await Assert.That(UnsupportedPlatforms(typeof(SystemDnsClient).GetConstructor(Type.EmptyTypes))).IsEquivalentTo(["android"]);
+		await Assert.That(SupportedPlatforms(typeof(SystemDnsClient).GetConstructor(Type.EmptyTypes))).IsEquivalentTo(["android29.0"]);
 		await Assert.That(UnsupportedPlatforms(typeof(SystemDnsClient).GetConstructor([typeof(DnsResolverOptions)]))).IsEmpty();
 	}
 
@@ -373,6 +374,12 @@ public class SystemDnsClientTest
 	{
 		ArgumentNullException.ThrowIfNull(member);
 		return [.. member.GetCustomAttributes<UnsupportedOSPlatformAttribute>(inherit: false).Select(static attribute => attribute.PlatformName)];
+	}
+
+	private static string[] SupportedPlatforms(MemberInfo? member)
+	{
+		ArgumentNullException.ThrowIfNull(member);
+		return [.. member.GetCustomAttributes<SupportedOSPlatformAttribute>(inherit: false).Select(static attribute => attribute.PlatformName)];
 	}
 
 	private static SystemDnsClient Create(bool withOptions)

@@ -16,29 +16,42 @@ namespace Dns.Net;
 /// No name is treated apart, onion included.
 /// Names in results are labels joined by dots, without escapes, so <c>a\.b.example</c> comes back as <c>a.b.example</c>.
 /// </para>
+/// <para>
+/// On Android, where .NET cannot find the servers of the system, a client created without options resolves through a <see cref="DnsClient" /> over an <see cref="AndroidDnsTransport" />, and results follow the rules of <see cref="DnsClient" />.
+/// </para>
 /// </remarks>
 [UnsupportedOSPlatform("browser")]
 [UnsupportedOSPlatform("wasi")]
 public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 {
-	// null for the static methods of System.Net.Dns.
+	// null for the static methods of System.Net.Dns, and on Android.
 	private readonly DnsResolver? _resolver;
+
+	private readonly DnsClient? _android;
 
 	private volatile bool _disposed;
 
 	/// <summary>
-	/// Initializes a client that resolves through the static methods of <see cref="System.Net.Dns" />, with the servers that the system is configured with.
+	/// Initializes a client that resolves with the servers that the system is configured with.
 	/// </summary>
-	/// <remarks>Where .NET cannot find the servers, each query throws <see cref="PlatformNotSupportedException" /> at the call.</remarks>
+	/// <remarks>Before Android 10 (API level 29), each query throws <see cref="PlatformNotSupportedException" /> at the call.</remarks>
 	[UnsupportedOSPlatform("android")]
+	[SupportedOSPlatform("android29.0")]
 	public SystemDnsClient()
 	{
+		if (OperatingSystem.IsAndroidVersionAtLeast(29))
+		{
+			_android = new DnsClient(new AndroidDnsTransport()) { QueriesOnionNames = true };
+		}
 	}
 
 	/// <summary>
 	/// Initializes a client that resolves through a new <see cref="DnsResolver" /> with <paramref name="options" />, which the client owns and disposes.
 	/// </summary>
-	/// <remarks>Exceptions of the constructor of <see cref="DnsResolver" /> come through as they are.</remarks>
+	/// <remarks>
+	/// Exceptions of the constructor of <see cref="DnsResolver" /> come through as they are.
+	/// On Android, empty <see cref="DnsResolverOptions.Servers" /> throw <see cref="PlatformNotSupportedException" />.
+	/// </remarks>
 	/// <param name="options">The options of the resolver; empty <see cref="DnsResolverOptions.Servers" /> stand for those of the system.</param>
 	/// <exception cref="ArgumentNullException"><paramref name="options" /> is <see langword="null" />.</exception>
 	public SystemDnsClient(DnsResolverOptions options)
@@ -57,6 +70,11 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 		CheckNullCharacter(name);
 		ObjectDisposedException.ThrowIf(_disposed, this);
 
+		if (_android is not null)
+		{
+			return _android.ResolveAddressesAsync(name, addressFamily, cancellationToken);
+		}
+
 		Task<DnsResult<AddressRecord>> query = _resolver is null
 			? System.Net.Dns.ResolveAddressesAsync(name, addressFamily, cancellationToken)
 			: _resolver.ResolveAddressesAsync(name, addressFamily, cancellationToken);
@@ -72,6 +90,14 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 		QueryArguments.CheckName(name);
 		CheckNullCharacter(name);
 		ObjectDisposedException.ThrowIf(_disposed, this);
+
+		if (_android is not null)
+		{
+			// The types of the resolver of .NET, so that what resolves does not depend on the platform.
+			return IsResolverType<TRecord>()
+				? _android.ResolveAsync<TRecord>(name, cancellationToken)
+				: throw new NotSupportedException($"The resolver of .NET does not resolve records of the type {typeof(TRecord)}.");
+		}
 
 		// For a value type, each comparison is a constant in the code compiled for TRecord.
 		if (typeof(TRecord) == typeof(DnsSrvRecord))
@@ -125,6 +151,16 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 	{
 		_disposed = true;
 		return _resolver?.DisposeAsync() ?? ValueTask.CompletedTask;
+	}
+
+	private static bool IsResolverType<TRecord>()
+	{
+		return typeof(TRecord) == typeof(DnsSrvRecord)
+			|| typeof(TRecord) == typeof(DnsMxRecord)
+			|| typeof(TRecord) == typeof(DnsTxtRecord)
+			|| typeof(TRecord) == typeof(DnsCNameRecord)
+			|| typeof(TRecord) == typeof(DnsPtrRecord)
+			|| typeof(TRecord) == typeof(DnsNsRecord);
 	}
 
 	// The resolver of Windows would end the name at a null character and query only the part before it.

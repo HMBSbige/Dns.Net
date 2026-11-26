@@ -20,6 +20,7 @@ Modern DNS for .NET: a message model with its wire format, a query layer for any
 | EDNS(0) (RFC 6891) | ✅ |
 | Length framing for stream transports (RFC 7766) | ✅ |
 | Query client over `System.Net.Dns` and `System.Net.DnsResolver` | ✅ |
+| Transport over the DNS resolver of Android, with Private DNS | ✅ |
 | Query client over any transport: CNAME chains, negative caching TTLs (RFC 2308) | ✅ |
 | Server handler contract | ✅ |
 | Transports for classic DNS over UDP and TCP | ⚠️ |
@@ -32,7 +33,7 @@ The packages target .NET 11.
 
 | Package | Contents |
 | --- | --- |
-| `Dns.Net` | The clients `SystemDnsClient` and `DnsClient`; includes `Dns.Net.Abstractions`. |
+| `Dns.Net` | The clients `SystemDnsClient` and `DnsClient`, and `AndroidDnsTransport`; includes `Dns.Net.Abstractions`. |
 | `Dns.Net.Abstractions` | The message layer, the transport and server handler contracts, and the query contract `IDnsClient`, for libraries that take a client or a transport rather than make one. |
 
 ```shell
@@ -50,6 +51,8 @@ A DNS outcome such as NXDOMAIN comes back in `ResponseCode`, not as an exception
 When no response arrives, it returns SERVFAIL on Windows and throws on other platforms.
 It resolves addresses and SRV, MX, TXT, CNAME, PTR and NS records; `ResolveAsync` throws `NotSupportedException` for any other type.
 Names come back without escapes, so `a\.b.example` reads as `a.b.example`; `DnsClient` keeps the escapes.
+
+On Android, where .NET cannot find the system's servers, `new SystemDnsClient()` resolves through a `DnsClient` over `AndroidDnsTransport`, and needs Android 10 (API level 29); results then follow the rules of `DnsClient`.
 
 ```csharp
 using System.Net;
@@ -103,6 +106,8 @@ The client follows CNAME chains, takes the negative-cache TTL from the SOA recor
 Its `ResolveAsync<TRecord>` takes any record type that implements `IDnsQueryRecord<TSelf>`, one of your own included.
 It is a stub resolver: it expects a recursive resolver behind the transport.
 It answers a name in `onion` with NXDOMAIN without a query, unless `QueriesOnionNames` is `true`.
+
+`AndroidDnsTransport` sends queries through the DNS resolver of Android 10 (API level 29) or later, with the servers, Private DNS and cache of the network; it takes the value of `Network.getNetworkHandle()` for a network other than the default one.
 
 The example passes each query to a handler in the same process.
 

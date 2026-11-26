@@ -6,6 +6,7 @@
     <IsPackable>true</IsPackable>
     <Description>DNS clients for .NET: SystemDnsClient over System.Net.Dns and System.Net.DnsResolver, and DnsClient, which queries over any IDnsTransport, follows CNAME chains and takes negative-cache TTLs from SOA records (RFC 2308).</Description>
     <PackageTags>dns;dns-client;resolver;srv;mx;txt;ptr;cname</PackageTags>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
