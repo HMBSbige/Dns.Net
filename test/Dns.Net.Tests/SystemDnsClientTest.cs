@@ -1,6 +1,7 @@
 using Dns.Net.Abstractions;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -62,6 +63,7 @@ public class SystemDnsClientTest
 
 	[Test]
 	[MatrixDataSource]
+	[SuppressMessage("Reliability", "CA1849", Justification = "The test covers Dispose as well as DisposeAsync.")]
 	public async Task ADisposedClientThrows([Matrix] bool withOptions, [Matrix] bool disposeAsync)
 	{
 		SystemDnsClient client = Create(withOptions);
@@ -97,12 +99,12 @@ public class SystemDnsClientTest
 	{
 		// The resolver of Windows would query only the part before the null character.
 		const string name = "localhost\0.example.invalid";
-		using SystemDnsClient client = Create(withOptions);
+		await using SystemDnsClient client = Create(withOptions);
 
 		if (disposed)
 		{
 			// ReSharper disable once DisposeOnUsingVariable
-			client.Dispose();
+			await client.DisposeAsync();
 		}
 
 		// The name comes before the client being disposed, and after the address family.
@@ -134,7 +136,7 @@ public class SystemDnsClientTest
 		await Assert.That(() => { _ = client.ResolveAsync<HinfoRecord>(""); }).ThrowsExactly<ArgumentException>().WithParameterName("name");
 		await Assert.That(() => { _ = client.ResolveAsync<HinfoRecord>("a\0.example.com"); }).ThrowsExactly<ArgumentException>().WithParameterName("name");
 
-		client.Dispose();
+		await client.DisposeAsync();
 
 		await Assert.That(() => { _ = client.ResolveAsync<HinfoRecord>("a\0.example.com"); }).ThrowsExactly<ArgumentException>().WithParameterName("name");
 		await Assert.That(() => { _ = client.ResolveAsync<HinfoRecord>(StableName); }).ThrowsExactly<ObjectDisposedException>();
