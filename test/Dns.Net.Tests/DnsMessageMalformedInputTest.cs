@@ -44,28 +44,19 @@ public class DnsMessageMalformedInputTest
 	}
 
 	[Test]
-	public async Task RejectsPointersBeyondTheMessage()
+	[Arguments(4)] // into the header
+	[Arguments(29)] // to itself
+	[Arguments(33)] // forward, into the record's own class
+	[Arguments(0x3FF0)] // beyond the end of the message
+	public async Task RejectsOwnerPointersThatDoNotLeadToAnEarlierName(int pointer)
 	{
-		await AssertRejected(Response(Record(Pointer(0x3FF0), 1, Address)));
+		await AssertRejected(Response(Record(Pointer(pointer), 1, Address)));
 	}
 
 	[Test]
 	public async Task RejectsPointersCutOffByTheEndOfTheMessage()
 	{
 		await AssertRejected([.. Header(1, 0x8180, 1, 1, 0, 0), .. Question, 0xC0]);
-	}
-
-	[Test]
-	public async Task RejectsForwardPointers()
-	{
-		// The owner at 29 points to 33, inside the record's own TTL.
-		await AssertRejected(Response(Record(Pointer(33), 1, Address)));
-	}
-
-	[Test]
-	public async Task RejectsPointersToThemselves()
-	{
-		await AssertRejected(Response(Record(Pointer(29), 1, Address)));
 	}
 
 	[Test]
@@ -95,12 +86,6 @@ public class DnsMessageMalformedInputTest
 	{
 		// The owner at 29 is a label of length 3 that holds "a", 0 and "b", then a pointer to the 0 at 31, inside that label.
 		await AssertRejected(Response(Record([3, (byte)'a', 0, (byte)'b', .. Pointer(31)], 1, Address)));
-	}
-
-	[Test]
-	public async Task RejectsPointersIntoTheHeader()
-	{
-		await AssertRejected(Response(Record(Pointer(4), 1, Address)));
 	}
 
 	[Test]
@@ -187,11 +172,9 @@ public class DnsMessageMalformedInputTest
 		// The first call warms up anything that runs once.
 		_ = DnsMessage.TryDecode(forged, out _);
 		long before = GC.GetAllocatedBytesForCurrentThread();
-		bool decoded = DnsMessage.TryDecode(forged, out DnsMessage? message);
+		_ = DnsMessage.TryDecode(forged, out _);
 		long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-		await Assert.That(decoded).IsFalse();
-		await Assert.That(message).IsNull();
 		await Assert.That(allocated).IsLessThan(1024);
 		await AssertRejected(forged);
 		await AssertRejected(Concat(Header(1, 0x8180, 1, 2, 0, 0), Question, Record(Pointer(12), 1, Address)));
@@ -297,8 +280,8 @@ public class DnsMessageMalformedInputTest
 	{
 		// A message of 65532 bytes gives data of exactly 65535 bytes once its names are expanded; one of 65535 bytes, 3 more.
 		DnsMessage longest = await AssertAccepted(ExpandingSig(65532));
-		await Assert.That(longest.Answers[0].Data).IsTypeOf<DnsUnknownData>();
-		await Assert.That(((DnsUnknownData)longest.Answers[0].Data).RawData.Length).IsEqualTo(65535);
+		DnsUnknownData? data = await Assert.That(longest.Answers[0].Data).IsTypeOf<DnsUnknownData>();
+		await Assert.That(data?.RawData.Length).IsEqualTo(65535);
 
 		byte[] tooLong = ExpandingSig(65535);
 		await AssertRejected(tooLong);

@@ -9,14 +9,41 @@ namespace Dns.Net.Abstractions;
 /// Represents the data of an A record, an IPv4 address (RFC 1035, Sec. 3.4.1), or of an AAAA record, an IPv6 address (RFC 3596, Sec. 2.2).
 /// </summary>
 /// <remarks>The data keeps a copy of the address that it is given.</remarks>
-/// <param name="Address">The IPv4 or IPv6 address, whose family selects the record type.</param>
-/// <exception cref="ArgumentNullException"><paramref name="Address" /> is <see langword="null" />.</exception>
-/// <exception cref="ArgumentException"><paramref name="Address" /> is neither an IPv4 nor an IPv6 address.</exception>
-public sealed record DnsAddressData(IPAddress Address) : DnsRecordData
+public sealed record DnsAddressData : DnsRecordData
 {
 	private const int IPv4Length = 4;
 
 	private const int IPv6Length = 16;
+
+	private readonly IPAddress _address;
+
+	// Named like the property, as positional records name their parameters, so that named arguments and named positional patterns such as DnsAddressData(Address: ...) work as on the other record data types.
+#pragma warning disable IDE1006
+	/// <summary>
+	/// Initializes the data with a copy of an IPv4 or IPv6 address.
+	/// </summary>
+	/// <param name="Address">The IPv4 or IPv6 address, whose family selects the record type.</param>
+	/// <exception cref="ArgumentNullException"><paramref name="Address" /> is <see langword="null" />.</exception>
+	public DnsAddressData(IPAddress Address)
+	{
+		_address = CheckAddress(Address);
+	}
+
+	/// <summary>
+	/// Deconstructs the data into its address.
+	/// </summary>
+	/// <param name="Address">The IPv4 or IPv6 address.</param>
+	public void Deconstruct(out IPAddress Address)
+	{
+		Address = _address;
+	}
+#pragma warning restore IDE1006
+
+	// The decoder's own address, which nothing else references, needs no copy.
+	private DnsAddressData(ReadOnlySpan<byte> address)
+	{
+		_address = new IPAddress(address);
+	}
 
 	/// <summary>
 	/// Gets the IPv4 or IPv6 address, whose family selects the record type.
@@ -26,8 +53,7 @@ public sealed record DnsAddressData(IPAddress Address) : DnsRecordData
 	/// Encoding and the presentation format drop <see cref="IPAddress.ScopeId" />.
 	/// </remarks>
 	/// <exception cref="ArgumentNullException">The value set is <see langword="null" />.</exception>
-	/// <exception cref="ArgumentException">The value set is neither an IPv4 nor an IPv6 address.</exception>
-	public IPAddress Address { get; init => field = CheckAddress(value); } = CheckAddress(Address);
+	public IPAddress Address { get => _address; init => _address = CheckAddress(value); }
 
 	/// <summary>
 	/// Gets <see cref="DnsRecordType.Aaaa" /> for an IPv6 address and <see cref="DnsRecordType.A" /> for an IPv4 address.
@@ -57,7 +83,7 @@ public sealed record DnsAddressData(IPAddress Address) : DnsRecordData
 			return null;
 		}
 
-		return reader.TryReadBytes(length, out ReadOnlySpan<byte> address) ? new DnsAddressData(new IPAddress(address)) : null;
+		return reader.TryReadBytes(length, out ReadOnlySpan<byte> address) ? new DnsAddressData(address) : null;
 	}
 
 	private static IPAddress WithoutScope(IPAddress address)
@@ -72,12 +98,6 @@ public sealed record DnsAddressData(IPAddress Address) : DnsRecordData
 	private static IPAddress CheckAddress(IPAddress address)
 	{
 		ArgumentNullException.ThrowIfNull(address, nameof(Address));
-
-		if (address.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
-		{
-			throw new ArgumentException("The address is neither an IPv4 nor an IPv6 address.", nameof(Address));
-		}
-
 		return IPAddressCopy.Of(address);
 	}
 }

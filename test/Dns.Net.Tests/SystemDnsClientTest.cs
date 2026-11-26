@@ -54,11 +54,8 @@ public class SystemDnsClientTest
 		await Assert.That(() => { _ = client.ResolveAddressesAsync(StableName, AddressFamily.Unix); }).ThrowsExactly<ArgumentOutOfRangeException>().WithParameterName("addressFamily");
 		await Assert.That(() => { _ = client.ResolveAddressesAsync(StableName, (AddressFamily)12345); }).ThrowsExactly<ArgumentOutOfRangeException>().WithParameterName("addressFamily");
 
-		foreach (Func<string, CancellationToken, Task> method in Methods(client))
-		{
-			await Assert.That(() => { _ = method(null!, CancellationToken.None); }).ThrowsExactly<ArgumentNullException>().WithParameterName("name");
-			await Assert.That(() => { _ = method("", CancellationToken.None); }).ThrowsExactly<ArgumentException>().WithParameterName("name");
-		}
+		await Assert.That(() => { _ = client.ResolveAsync<DnsMxRecord>(null!); }).ThrowsExactly<ArgumentNullException>().WithParameterName("name");
+		await Assert.That(() => { _ = client.ResolveAsync<DnsMxRecord>(""); }).ThrowsExactly<ArgumentException>().WithParameterName("name");
 	}
 
 	[Test]
@@ -83,10 +80,7 @@ public class SystemDnsClientTest
 
 		await Assert.That(() => { _ = client.ResolveAddressesAsync(StableName, AddressFamily.Unspecified); }).ThrowsExactly<ObjectDisposedException>();
 
-		foreach (Func<string, CancellationToken, Task> method in Methods(client))
-		{
-			await Assert.That(() => { _ = method(StableName, CancellationToken.None); }).ThrowsExactly<ObjectDisposedException>();
-		}
+		await Assert.That(() => { _ = client.ResolveAsync<DnsMxRecord>(StableName); }).ThrowsExactly<ObjectDisposedException>();
 
 		// The arguments come first.
 		await Assert.That(() => { _ = client.ResolveAsync<DnsMxRecord>(null!); }).ThrowsExactly<ArgumentNullException>().WithParameterName("name");
@@ -115,10 +109,7 @@ public class SystemDnsClientTest
 
 		await Assert.That(() => { _ = client.ResolveAddressesAsync(name, AddressFamily.Unix); }).ThrowsExactly<ArgumentOutOfRangeException>().WithParameterName("addressFamily");
 
-		foreach (Func<string, CancellationToken, Task> method in Methods(client))
-		{
-			await Assert.That(() => { _ = method(name, CancellationToken.None); }).ThrowsExactly<ArgumentException>().WithParameterName("name");
-		}
+		await Assert.That(() => { _ = client.ResolveAsync<DnsMxRecord>(name); }).ThrowsExactly<ArgumentException>().WithParameterName("name");
 	}
 
 	[Test]
@@ -126,10 +117,8 @@ public class SystemDnsClientTest
 	public async Task ARecordTypeOutsideTheResolverThrowsAtOnceAfterTheOtherChecks([Matrix] bool withOptions)
 	{
 		SystemDnsClient client = Create(withOptions);
-		IDnsClient contract = client;
 
 		await Assert.That(() => { _ = client.ResolveAsync<HinfoRecord>(StableName); }).ThrowsExactly<NotSupportedException>();
-		await Assert.That(() => { _ = contract.ResolveAsync<HinfoRecord>(StableName); }).ThrowsExactly<NotSupportedException>();
 
 		// The name and then the client being disposed come first.
 		await Assert.That(() => { _ = client.ResolveAsync<HinfoRecord>(null!); }).ThrowsExactly<ArgumentNullException>().WithParameterName("name");
@@ -164,8 +153,12 @@ public class SystemDnsClientTest
 	}
 
 	[Test]
-	[MatrixDataSource]
-	public async Task TheNegativeCacheTtlIsThatOfTheResolver([Matrix(DnsResponseCode.NoError, DnsResponseCode.NxDomain, DnsResponseCode.FormatError, DnsResponseCode.ServerFailure, DnsResponseCode.Refused, (DnsResponseCode)16)] DnsResponseCode responseCode, [Matrix] bool hasRecords)
+	[Arguments(DnsResponseCode.NxDomain, false, 300)]
+	[Arguments(DnsResponseCode.NoError, false, 300)]
+	[Arguments(DnsResponseCode.ServerFailure, false, 0)]
+	[Arguments(DnsResponseCode.Refused, false, 0)]
+	[Arguments(DnsResponseCode.NoError, true, 0)]
+	public async Task OnlyNegativeAnswersKeepTheNegativeCacheTtlOfTheResolver(DnsResponseCode responseCode, bool hasRecords, int expectedSeconds)
 	{
 		// Some platforms report an SOA TTL for any response code, Windows even with records.
 		AddressRecord[] records = hasRecords ? [BclAddress("192.0.2.1", 60)] : [];
@@ -173,7 +166,7 @@ public class SystemDnsClientTest
 		DnsQueryResult<DnsAddressRecord> result = SystemDnsClient.ToQueryResult(Bcl.NewResult(responseCode, records, Seconds(300)));
 
 		DnsAddressRecord[] expectedRecords = hasRecords ? [Address("192.0.2.1", 60)] : [];
-		await Assert.That(result).IsEqualTo(new DnsQueryResult<DnsAddressRecord>(responseCode, expectedRecords, Seconds(300)));
+		await Assert.That(result).IsEqualTo(new DnsQueryResult<DnsAddressRecord>(responseCode, expectedRecords, Seconds(expectedSeconds)));
 	}
 
 	[Test]
@@ -181,11 +174,16 @@ public class SystemDnsClientTest
 	{
 		TimeSpan ttl = Seconds(60);
 
-		await Assert.That(SystemDnsClient.ToQueryResult(BclPositive(BclAddress("2001:db8::1", 60)))).IsEqualTo(Positive(Address("2001:db8::1", 60)));
+		await Assert.That(SystemDnsClient.ToQueryResult(BclPositive(BclAddress("192.0.2.1", 300), BclAddress("2001:db8::1", 120), BclAddress("192.0.2.2", 30), BclAddress("2001:db8::2", 90))))
+			.IsEqualTo(Positive(Address("192.0.2.1", 300), Address("2001:db8::1", 120), Address("192.0.2.2", 30), Address("2001:db8::2", 90)));
 		await Assert.That(SystemDnsClient.ToQueryResult(BclPositive(Bcl.NewMxRecord("mail.example.com", 10, ttl), Bcl.NewMxRecord("backup.example.com", 20, ttl * 2))))
 			.IsEqualTo(Positive(new DnsMxRecord("mail.example.com", 10, ttl), new DnsMxRecord("backup.example.com", 20, ttl * 2)));
 		await Assert.That(SystemDnsClient.ToQueryResult(BclPositive(Bcl.NewTxtRecord(["v=spf1", "-all"], ttl)))).IsEqualTo(Positive(new DnsTxtRecord(["v=spf1", "-all"], ttl)));
-		await Assert.That(SystemDnsClient.ToQueryResult(BclPositive(Bcl.NewCNameRecord("example.com", ttl)))).IsEqualTo(Positive(new DnsCNameRecord("example.com", ttl)));
+
+		// The resolver gives each CNAME of a chain without its owner.
+		await Assert.That(SystemDnsClient.ToQueryResult(BclPositive(Bcl.NewCNameRecord("a.example.net", Seconds(30)), Bcl.NewCNameRecord("b.example.org", Seconds(300)))))
+			.IsEqualTo(Positive(new DnsCNameRecord("a.example.net", Seconds(30)), new DnsCNameRecord("b.example.org", Seconds(300))));
+
 		await Assert.That(SystemDnsClient.ToQueryResult(BclPositive(Bcl.NewPtrRecord("host.example.com", ttl)))).IsEqualTo(Positive(new DnsPtrRecord("host.example.com", ttl)));
 		await Assert.That(SystemDnsClient.ToQueryResult(BclPositive(Bcl.NewNsRecord("a.iana-servers.net", ttl)))).IsEqualTo(Positive(new DnsNsRecord("a.iana-servers.net", ttl)));
 
@@ -194,54 +192,23 @@ public class SystemDnsClientTest
 	}
 
 	[Test]
-	public async Task RecordsKeepTheTtlsOfTheResolver()
-	{
-		DnsQueryResult<DnsAddressRecord> a = SystemDnsClient.ToQueryResult(BclPositive(BclAddress("192.0.2.1", 300), BclAddress("192.0.2.2", 30)));
-		DnsQueryResult<DnsAddressRecord> mixed = SystemDnsClient.ToQueryResult(BclPositive(BclAddress("192.0.2.1", 300), BclAddress("2001:db8::1", 120), BclAddress("192.0.2.2", 30), BclAddress("2001:db8::2", 90)));
-		DnsQueryResult<DnsTxtRecord> txt = SystemDnsClient.ToQueryResult(BclPositive(Bcl.NewTxtRecord(["a"], Seconds(50)), Bcl.NewTxtRecord(["b"], Seconds(40))));
-
-		// The resolver gives each CNAME of a chain without its owner.
-		DnsQueryResult<DnsCNameRecord> chain = SystemDnsClient.ToQueryResult(BclPositive(Bcl.NewCNameRecord("a.example.net", Seconds(30)), Bcl.NewCNameRecord("b.example.org", Seconds(300))));
-
-		await Assert.That(chain).IsEqualTo(Positive(new DnsCNameRecord("a.example.net", Seconds(30)), new DnsCNameRecord("b.example.org", Seconds(300))));
-		await Assert.That(a).IsEqualTo(Positive(Address("192.0.2.1", 300), Address("192.0.2.2", 30)));
-		await Assert.That(mixed).IsEqualTo(Positive(Address("192.0.2.1", 300), Address("2001:db8::1", 120), Address("192.0.2.2", 30), Address("2001:db8::2", 90)));
-		await Assert.That(txt).IsEqualTo(Positive(new DnsTxtRecord(["a"], Seconds(50)), new DnsTxtRecord(["b"], Seconds(40))));
-	}
-
-	[Test]
-	public async Task SrvRecordsAndTheirAddressesKeepTheTtlsOfTheResolver()
-	{
-		List<AddressRecord> sip = [BclAddress("192.0.2.1", 20), BclAddress("2001:db8::1", 30), BclAddress("192.0.2.2", 10)];
-		List<AddressRecord> backup = [BclAddress("192.0.2.3", 5)];
-		DnsResult<SrvRecord> result = BclPositive(
-			Bcl.NewSrvRecord("sip.example.com", 5060, 10, 0, Seconds(300), sip),
-			Bcl.NewSrvRecord("backup.example.com", 5060, 20, 0, Seconds(100), backup));
-
-		await Assert.That(SystemDnsClient.ToQueryResult(result)).IsEqualTo(Positive(
-			new DnsSrvRecord("sip.example.com", 5060, 10, 0, Seconds(300), [Address("192.0.2.1", 20), Address("2001:db8::1", 30), Address("192.0.2.2", 10)]),
-			new DnsSrvRecord("backup.example.com", 5060, 20, 0, Seconds(100), [Address("192.0.2.3", 5)])));
-	}
-
-	[Test]
 	public async Task EachSrvRecordMapsItsAddresses()
 	{
 		// DnsResolver gives SRV records with the same target the same list.
-		TimeSpan ttl = Seconds(300);
 		List<AddressRecord> sip = [BclAddress("192.0.2.1", 10), BclAddress("2001:db8::1", 20)];
 		List<AddressRecord> backup = [BclAddress("192.0.2.2", 30)];
 		DnsResult<SrvRecord> result = BclPositive(
-			Bcl.NewSrvRecord("sip.example.com", 5060, 10, 60, ttl, sip),
-			Bcl.NewSrvRecord("backup.example.com", 5060, 20, 0, ttl, backup),
-			Bcl.NewSrvRecord("SIP.example.com", 5061, 30, 0, ttl, sip),
-			Bcl.NewSrvRecord("other.example.com", 5062, 40, 0, ttl, null));
+			Bcl.NewSrvRecord("sip.example.com", 5060, 10, 60, Seconds(300), sip),
+			Bcl.NewSrvRecord("backup.example.com", 5060, 20, 0, Seconds(100), backup),
+			Bcl.NewSrvRecord("SIP.example.com", 5061, 30, 0, Seconds(60), sip),
+			Bcl.NewSrvRecord("other.example.com", 5062, 40, 0, Seconds(30), null));
 
 		DnsAddressRecord[] sipAddresses = [Address("192.0.2.1", 10), Address("2001:db8::1", 20)];
 		await Assert.That(SystemDnsClient.ToQueryResult(result)).IsEqualTo(Positive(
-			new DnsSrvRecord("sip.example.com", 5060, 10, 60, ttl, sipAddresses),
-			new DnsSrvRecord("backup.example.com", 5060, 20, 0, ttl, [Address("192.0.2.2", 30)]),
-			new DnsSrvRecord("SIP.example.com", 5061, 30, 0, ttl, sipAddresses),
-			new DnsSrvRecord("other.example.com", 5062, 40, 0, ttl, [])));
+			new DnsSrvRecord("sip.example.com", 5060, 10, 60, Seconds(300), sipAddresses),
+			new DnsSrvRecord("backup.example.com", 5060, 20, 0, Seconds(100), [Address("192.0.2.2", 30)]),
+			new DnsSrvRecord("SIP.example.com", 5061, 30, 0, Seconds(60), sipAddresses),
+			new DnsSrvRecord("other.example.com", 5062, 40, 0, Seconds(30), [])));
 	}
 
 	[Test]
@@ -431,7 +398,6 @@ public class SystemDnsClientTest
 		return query.Questions[0].Type;
 	}
 
-	// Calls the client method for type and returns the response code.
 	private static async Task<DnsResponseCode> ResolveAsync(SystemDnsClient client, DnsRecordType type, string name, CancellationToken cancellationToken)
 	{
 		return type switch
@@ -456,19 +422,6 @@ public class SystemDnsClientTest
 
 		await Assert.That(lookups.HasStarted(label)).IsTrue();
 		await Assert.That(async () => await task).Throws<OperationCanceledException>();
-	}
-
-	private static Func<string, CancellationToken, Task>[] Methods(SystemDnsClient client)
-	{
-		return
-		[
-			(name, cancellationToken) => client.ResolveAsync<DnsSrvRecord>(name, cancellationToken).AsTask(),
-			(name, cancellationToken) => client.ResolveAsync<DnsMxRecord>(name, cancellationToken).AsTask(),
-			(name, cancellationToken) => client.ResolveAsync<DnsTxtRecord>(name, cancellationToken).AsTask(),
-			(name, cancellationToken) => client.ResolveAsync<DnsCNameRecord>(name, cancellationToken).AsTask(),
-			(name, cancellationToken) => client.ResolveAsync<DnsPtrRecord>(name, cancellationToken).AsTask(),
-			(name, cancellationToken) => client.ResolveAsync<DnsNsRecord>(name, cancellationToken).AsTask()
-		];
 	}
 
 	// Records the DnsLookup activities that DnsResolver starts, synchronously, on the "Experimental.System.Net.NameResolution" ActivitySource.

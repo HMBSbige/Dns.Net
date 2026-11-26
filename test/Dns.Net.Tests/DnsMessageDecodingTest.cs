@@ -154,13 +154,16 @@ public class DnsMessageDecodingTest
 	}
 
 	[Test]
-	public async Task KeepsTheDataOfOtherTypesAsIs()
+	// The data happens to look like a pointer; for a type without a class it is only bytes.
+	[Arguments(0xFF00, new byte[] { 0xC0, 0x0C, 0x00 })]
+	// SVCB data without its target name (RFC 9460, Sec. 2.2); the decoder does not parse SVCB.
+	[Arguments(64, new byte[] { 0x00, 0x01 })]
+	public async Task KeepsTheDataOfTypesThatItDoesNotParseAsIs(int type, byte[] data)
 	{
-		// The data happens to look like a pointer; for a type without a class it is only bytes.
-		byte[] message = Concat(Header(0, 0x8000, 1, 1, 0, 0), Question, Record(Pointer(12), 0xFF00, [0xC0, 0x0C, 0x00]));
+		byte[] message = Concat(Header(0, 0x8000, 1, 1, 0, 0), Question, Record(Pointer(12), type, data));
 		DnsMessage decoded = DnsMessage.Decode(message);
 
-		await Assert.That(decoded.Answers[0].Data).IsEqualTo(new DnsUnknownData((DnsRecordType)0xFF00, (byte[])[0xC0, 0x0C, 0x00]));
+		await Assert.That(decoded.Answers[0].Data).IsEqualTo(new DnsUnknownData((DnsRecordType)type, data));
 		await Assert.That(Convert.ToHexString(decoded.Encode())).IsEqualTo(Convert.ToHexString(message));
 	}
 
@@ -196,23 +199,7 @@ public class DnsMessageDecodingTest
 		await Assert.That(Convert.ToHexString(decoded.Encode())).IsEqualTo(Convert.ToHexString(message));
 	}
 
-	[Test]
-	public async Task ExpandsTheNamesInMinfoData()
-	{
-		// RFC 1035, Sec. 3.3.7: both mailboxes point to the question.
-		byte[] message = Concat(Header(0, 0x8000, 1, 1, 0, 0), Question, Record(Pointer(12), 14, [.. Pointer(12), .. Pointer(12)]));
-		DnsUnknownData expanded = new((DnsRecordType)14, (byte[])[.. Name("example", "com"), .. Name("example", "com")]);
-		DnsMessage decoded = DnsMessage.Decode(message);
-
-		await Assert.That(decoded.Answers[0].Data).IsEqualTo(expanded);
-
-		// Another question takes the place that the pointers led to.
-		DnsMessage moved = decoded with { Questions = [new DnsQuestion(DnsName.Parse("other.example.net"), DnsRecordType.A)] };
-		await Assert.That(DnsMessage.Decode(moved.Encode()).Answers[0].Data).IsEqualTo(expanded);
-	}
-
-	[Test]
-	public async Task ExpandsTheNamesInTheDataOfEachOlderType()
+	public static IEnumerable<Func<(int Type, byte[] Data, byte[] Expected)>> OlderTypesWithNames()
 	{
 		byte[] example = Name("example", "com");
 		byte[] afs = CompressedName(12, "afs");
@@ -221,66 +208,60 @@ public class DnsMessageDecodingTest
 		// MD, MF, MB, MG and MR: a name (RFC 1035, Sec. 3.3).
 		foreach (int type in (int[])[3, 4, 7, 8, 9])
 		{
-			await AssertExpanded(type, Pointer(12), example);
+			yield return () => (type, Pointer(12), example);
 		}
 
 		// MINFO and RP: two names (RFC 1035, Sec. 3.3.7; RFC 1183, Sec. 2.2).
+		yield return () => (14, [.. Pointer(12), .. Pointer(12)], [.. example, .. example]);
+
 		foreach (int type in (int[])[14, 17])
 		{
-			await AssertExpanded(type, [.. afs, .. Pointer(12)], [.. afsExpanded, .. example]);
+			yield return () => (type, [.. afs, .. Pointer(12)], [.. afsExpanded, .. example]);
 		}
 
 		// AFSDB and RT: a 16-bit field, then a name (RFC 1183, Sec. 1 and 3.3).
 		foreach (int type in (int[])[18, 21])
 		{
-			await AssertExpanded(type, [0x00, 0x01, .. afs], [0x00, 0x01, .. afsExpanded]);
+			yield return () => (type, [0x00, 0x01, .. afs], [0x00, 0x01, .. afsExpanded]);
 		}
 
 		// PX: a 16-bit preference, then two names (RFC 2163).
-		await AssertExpanded(26, [0x00, 0x0A, .. Pointer(12), .. afs], [0x00, 0x0A, .. example, .. afsExpanded]);
+		yield return () => (26, [0x00, 0x0A, .. Pointer(12), .. afs], [0x00, 0x0A, .. example, .. afsExpanded]);
 
-		// NAPTR: order, preference, and the strings flags, services and regexp, then the replacement (RFC 3403, Sec. 4.1).
+		// NAPTR: order, preference, and the strings flags, services and regexp, then the replacement (RFC 3403, Sec. 4.1), as a pointer or in full.
 		byte[] naptrFields = [0x00, 0x64, 0x00, 0x0A, 1, (byte)'u', 7, .. "E2U+sip"u8, 0];
-		await AssertExpanded(35, [.. naptrFields, .. Pointer(12)], [.. naptrFields, .. example]);
+		byte[] sip = Name("sip", "example", "com");
+		yield return () => (35, [.. naptrFields, .. Pointer(12)], [.. naptrFields, .. example]);
+		yield return () => (35, [.. naptrFields, .. sip], [.. naptrFields, .. sip]);
 
 		// SIG: 18 bytes of fixed fields, the signer, then the signature (RFC 2535, Sec. 4.1).
 		byte[] sigFields = [0x00, 0x01, 5, 2, .. U32(3600), .. U32(2), .. U32(1), 0x12, 0x34];
-		await AssertExpanded(24, [.. sigFields, .. Pointer(12), 0xAA, 0xBB], [.. sigFields, .. example, 0xAA, 0xBB]);
+		yield return () => (24, [.. sigFields, .. Pointer(12), 0xAA, 0xBB], [.. sigFields, .. example, 0xAA, 0xBB]);
 
 		// NXT: the next name, then the type bitmap (RFC 2535, Sec. 5.2).
-		await AssertExpanded(30, [.. afs, 0x40, 0x01], [.. afsExpanded, 0x40, 0x01]);
+		yield return () => (30, [.. afs, 0x40, 0x01], [.. afsExpanded, 0x40, 0x01]);
 	}
 
 	[Test]
-	public async Task ExpandedDataTakesAnArrayOfItsOwnLength()
+	[MethodDataSource(nameof(OlderTypesWithNames))]
+	public async Task ExpandsTheNamesInTheDataOfOlderTypes(int type, byte[] data, byte[] expected)
 	{
-		byte[] example = Name("example", "com");
-		byte[] sip = Name("sip", "example", "com");
-		byte[] naptrFields = [0x00, 0x64, 0x00, 0x0A, 1, (byte)'u', 7, .. "E2U+sip"u8, 0];
-		byte[] sigFields = [0x00, 0x01, 5, 2, .. U32(3600), .. U32(2), .. U32(1), 0x12, 0x34];
+		byte[] message = Concat(Header(0, 0x8000, 1, 1, 0, 0), Question, Record(Pointer(12), type, data));
+		DnsUnknownData expanded = new((DnsRecordType)type, expected);
+		DnsMessage decoded = DnsMessage.Decode(message);
 
-		(int Type, byte[] Data, byte[] Expected)[] cases =
-		[
-			// NAPTR, with the replacement uncompressed and as a pointer to the question.
-			(35, [.. naptrFields, .. sip], [.. naptrFields, .. sip]),
-			(35, [.. naptrFields, .. Pointer(12)], [.. naptrFields, .. example]),
-			// RP: two names.
-			(17, [.. CompressedName(12, "afs"), .. Pointer(12)], [.. Name("afs", "example", "com"), .. example]),
-			// SIG: the signer between the fixed fields and the signature.
-			(24, [.. sigFields, .. Pointer(12), 0xAA, 0xBB], [.. sigFields, .. example, 0xAA, 0xBB])
-		];
+		DnsUnknownData? unknown = await Assert.That(decoded.Answers[0].Data).IsTypeOf<DnsUnknownData>();
+		await Assert.That(unknown).IsEqualTo(expanded);
 
-		foreach ((int type, byte[] data, byte[] expected) in cases)
-		{
-			byte[] message = Concat(Header(0, 0x8000, 1, 1, 0, 0), Question, Record(Pointer(12), type, data));
-			ReadOnlyMemory<byte> rawData = DnsMessage.Decode(message).Answers[0].Data is DnsUnknownData unknown ? unknown.RawData : default;
-			bool isArray = MemoryMarshal.TryGetArray(rawData, out ArraySegment<byte> segment);
+		// Another question takes the place that the pointers led to.
+		DnsMessage moved = decoded with { Questions = [new DnsQuestion(DnsName.Parse("other.example.net"), DnsRecordType.A)] };
+		await Assert.That(DnsMessage.Decode(moved.Encode()).Answers[0].Data).IsEqualTo(expanded);
 
-			await Assert.That(Convert.ToHexString(rawData.Span)).IsEqualTo(Convert.ToHexString(expected));
-			await Assert.That(isArray).IsTrue();
-			await Assert.That(segment.Offset).IsEqualTo(0);
-			await Assert.That(segment.Array?.Length).IsEqualTo(expected.Length);
-		}
+		// An array of exactly the data keeps the record from holding on to the pooled buffer that the names were expanded in.
+		bool isArray = MemoryMarshal.TryGetArray(unknown?.RawData ?? default, out ArraySegment<byte> segment);
+		await Assert.That(isArray).IsTrue();
+		await Assert.That(segment.Offset).IsEqualTo(0);
+		await Assert.That(segment.Array?.Length).IsEqualTo(expected.Length);
 	}
 
 	[Test]
@@ -292,32 +273,6 @@ public class DnsMessageDecodingTest
 
 		await Assert.That(decoded.Answers[0].Data).IsEqualTo(new DnsUnknownData((DnsRecordType)26, (byte[])[0xC0]));
 		await Assert.That(Convert.ToHexString(decoded.Encode())).IsEqualTo(Convert.ToHexString(message));
-	}
-
-	[Test]
-	public async Task KeepsTheDataOfTypesThatItDoesNotParseUnchecked()
-	{
-		// SVCB data without its target name (RFC 9460, Sec. 2.2); the decoder does not parse SVCB.
-		byte[] message = Concat(Header(0, 0x8000, 1, 1, 0, 0), Question, Record(Pointer(12), 64, [0x00, 0x01]));
-
-		bool decoded = DnsMessage.TryDecode(message, out DnsMessage? response);
-
-		await Assert.That(decoded).IsTrue();
-		await Assert.That(response?.Answers[0].Data).IsEqualTo(new DnsUnknownData(DnsRecordType.Svcb, (byte[])[0x00, 0x01]));
-	}
-
-	[Test]
-	public async Task FollowsPointersToPointers()
-	{
-		// The second answer's owner points to the first answer's owner, which points to the question.
-		byte[] message = Concat(
-			Header(0, 0x8000, 1, 2, 0, 0),
-			Question,
-			Record(Pointer(12), 1, [192, 0, 2, 1]),
-			Record(Pointer(29), 1, [192, 0, 2, 2]));
-		DnsMessage decoded = DnsMessage.Decode(message);
-
-		await Assert.That(decoded.Answers[1].Name).IsEqualTo(DnsName.Parse("example.com"));
 	}
 
 	[Test]
@@ -334,17 +289,5 @@ public class DnsMessageDecodingTest
 
 		await Assert.That(decoded.Answers[0].Data).IsEqualTo(new DnsCNameData(alias));
 		await Assert.That(decoded.Answers[1].Data).IsEqualTo(new DnsSoaData(alias, alias, 1, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(5)));
-	}
-
-	// Decodes a record of type with data and expects its names expanded, also after the question changes.
-	private static async Task AssertExpanded(int type, byte[] data, byte[] expected)
-	{
-		byte[] message = Concat(Header(0, 0x8000, 1, 1, 0, 0), Question, Record(Pointer(12), type, data));
-		DnsUnknownData expanded = new((DnsRecordType)type, expected);
-		DnsMessage decoded = DnsMessage.Decode(message);
-		DnsMessage moved = decoded with { Questions = [new DnsQuestion(DnsName.Parse("other.example.net"), DnsRecordType.A)] };
-
-		await Assert.That(decoded.Answers[0].Data).IsEqualTo(expanded);
-		await Assert.That(DnsMessage.Decode(moved.Encode()).Answers[0].Data).IsEqualTo(expanded);
 	}
 }

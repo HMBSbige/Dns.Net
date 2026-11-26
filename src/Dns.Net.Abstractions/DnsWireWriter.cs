@@ -244,14 +244,7 @@ internal ref struct DnsWireWriter
 			Grow();
 		}
 
-		int i = hash & _mask;
-
-		while (_table[i].Offset is not 0)
-		{
-			i = i + 1 & _mask;
-		}
-
-		_table[i] = new CompressionEntry(hash, (ushort)offset, depth);
+		Place(new CompressionEntry(hash, (ushort)offset, depth));
 		++_count;
 	}
 
@@ -267,18 +260,23 @@ internal ref struct DnsWireWriter
 		{
 			if (entry.Offset is not 0)
 			{
-				int i = entry.Hash & _mask;
-
-				while (_table[i].Offset is not 0)
-				{
-					i = i + 1 & _mask;
-				}
-
-				_table[i] = entry;
+				Place(entry);
 			}
 		}
 
 		ArrayPool<CompressionEntry>.Shared.Return(old);
+	}
+
+	private readonly void Place(CompressionEntry entry)
+	{
+		int i = entry.Hash & _mask;
+
+		while (_table[i].Offset is not 0)
+		{
+			i = i + 1 & _mask;
+		}
+
+		_table[i] = entry;
 	}
 
 	// Offset 0 marks an empty slot: the header starts there, so no name can.

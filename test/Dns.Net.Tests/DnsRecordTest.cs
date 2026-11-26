@@ -1,5 +1,6 @@
 using Dns.Net.Abstractions;
 using System.Net;
+using static Dns.Net.Tests.Equality;
 
 namespace Dns.Net.Tests;
 
@@ -9,24 +10,30 @@ public class DnsRecordTest
 
 	private static readonly TimeSpan Hour = TimeSpan.FromHours(1);
 
-	[Test]
-	public async Task ToStringWritesALineOfAMasterFile()
+	public static IEnumerable<Func<(DnsResourceRecord Record, string Line)>> Lines()
 	{
-		await AssertLine(new DnsResourceRecord(Example, TimeSpan.FromSeconds(300), new DnsAddressData(IPAddress.Parse("192.0.2.1"))), "example.com. 300 IN A 192.0.2.1");
-		await AssertLine(new DnsResourceRecord(Example, TimeSpan.FromSeconds(300.9), new DnsAddressData(IPAddress.Parse("2001:db8::1"))), "example.com. 300 IN AAAA 2001:db8::1");
-		await AssertLine(new DnsResourceRecord(DnsName.Parse("www.example.com"), Hour, new DnsCNameData(Example)), "www.example.com. 3600 IN CNAME example.com.");
-		await AssertLine(new DnsResourceRecord(Example, Hour, new DnsMxData(10, DnsName.Parse("mail.example.com"))), "example.com. 3600 IN MX 10 mail.example.com.");
-		await AssertLine(new DnsResourceRecord(DnsName.Root, Hour, new DnsNsData(DnsName.Parse("a.root-servers.net"))), ". 3600 IN NS a.root-servers.net.");
-		await AssertLine(new DnsResourceRecord(DnsName.Parse("1.2.0.192.in-addr.arpa"), Hour, new DnsPtrData(Example)), "1.2.0.192.in-addr.arpa. 3600 IN PTR example.com.");
-		await AssertLine(new DnsResourceRecord(DnsName.Parse("_sip._tcp.example.com"), Hour, new DnsSrvData(10, 60, 5060, DnsName.Root)), "_sip._tcp.example.com. 3600 IN SRV 10 60 5060 .");
-		await AssertLine(new DnsResourceRecord(Example, Hour, new DnsSoaData(DnsName.Parse("ns1.example.com"), DnsName.Parse("hostmaster.example.com"), 2024010101, TimeSpan.FromHours(2), Hour, TimeSpan.FromDays(14), TimeSpan.FromMinutes(5))), "example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2024010101 7200 3600 1209600 300");
-		await AssertLine(new DnsResourceRecord(Example, Hour, new DnsTxtData(["v=spf1 -all"u8.ToArray(), (byte[])[(byte)'"', (byte)'\\', 9, 255, (byte)' '], ReadOnlyMemory<byte>.Empty])), @"example.com. 3600 IN TXT ""v=spf1 -all"" ""\""\\\009\255 "" """"");
-		await AssertLine(new DnsResourceRecord(Example, Hour, new DnsUnknownData(DnsRecordType.Txt, ReadOnlyMemory<byte>.Empty)), @"example.com. 3600 IN TXT \# 0");
-		await AssertLine(new DnsResourceRecord(Example, Hour, new DnsUnknownData((DnsRecordType)65280, (byte[])[0xDE, 0xAD, 0xBE, 0xEF])), @"example.com. 3600 IN TYPE65280 \# 4 DEADBEEF");
-		await AssertLine(new DnsResourceRecord(Example, Hour, new DnsUnknownData(DnsRecordType.Caa, ReadOnlyMemory<byte>.Empty)) { Class = DnsClass.Any }, @"example.com. 3600 ANY CAA \# 0");
-		await AssertLine(new DnsResourceRecord(DnsName.Parse("version.bind"), TimeSpan.Zero, new DnsTxtData(["9"u8.ToArray()])) { Class = DnsClass.Chaos }, @"version.bind. 0 CH TXT ""9""");
-		await AssertLine(new DnsResourceRecord(DnsName.Parse(@"a\.b"), TimeSpan.Zero, new DnsCNameData(Example)) { Class = (DnsClass)99 }, @"a\.b. 0 CLASS99 CNAME example.com.");
-		await AssertLine(new DnsResourceRecord(DnsName.Parse(@"acct\;prod.example"), TimeSpan.Zero, new DnsAddressData(IPAddress.Parse("192.0.2.1"))), @"acct\;prod.example. 0 IN A 192.0.2.1");
+		yield return () => (new DnsResourceRecord(Example, TimeSpan.FromSeconds(300), new DnsAddressData(IPAddress.Parse("192.0.2.1"))), "example.com. 300 IN A 192.0.2.1");
+		yield return () => (new DnsResourceRecord(Example, TimeSpan.FromSeconds(300.9), new DnsAddressData(IPAddress.Parse("2001:db8::1"))), "example.com. 300 IN AAAA 2001:db8::1");
+		yield return () => (new DnsResourceRecord(DnsName.Parse("www.example.com"), Hour, new DnsCNameData(Example)), "www.example.com. 3600 IN CNAME example.com.");
+		yield return () => (new DnsResourceRecord(Example, Hour, new DnsMxData(10, DnsName.Parse("mail.example.com"))), "example.com. 3600 IN MX 10 mail.example.com.");
+		yield return () => (new DnsResourceRecord(DnsName.Root, Hour, new DnsNsData(DnsName.Parse("a.root-servers.net"))), ". 3600 IN NS a.root-servers.net.");
+		yield return () => (new DnsResourceRecord(DnsName.Parse("1.2.0.192.in-addr.arpa"), Hour, new DnsPtrData(Example)), "1.2.0.192.in-addr.arpa. 3600 IN PTR example.com.");
+		yield return () => (new DnsResourceRecord(DnsName.Parse("_sip._tcp.example.com"), Hour, new DnsSrvData(10, 60, 5060, DnsName.Root)), "_sip._tcp.example.com. 3600 IN SRV 10 60 5060 .");
+		yield return () => (new DnsResourceRecord(Example, Hour, new DnsSoaData(DnsName.Parse("ns1.example.com"), DnsName.Parse("hostmaster.example.com"), 2024010101, TimeSpan.FromHours(2), Hour, TimeSpan.FromDays(14), TimeSpan.FromMinutes(5))), "example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. 2024010101 7200 3600 1209600 300");
+		yield return () => (new DnsResourceRecord(Example, Hour, new DnsTxtData(["v=spf1 -all"u8.ToArray(), (byte[])[(byte)'"', (byte)'\\', 9, 255, (byte)' '], ReadOnlyMemory<byte>.Empty])), @"example.com. 3600 IN TXT ""v=spf1 -all"" ""\""\\\009\255 "" """"");
+		yield return () => (new DnsResourceRecord(Example, Hour, new DnsUnknownData(DnsRecordType.Txt, ReadOnlyMemory<byte>.Empty)), @"example.com. 3600 IN TXT \# 0");
+		yield return () => (new DnsResourceRecord(Example, Hour, new DnsUnknownData((DnsRecordType)65280, (byte[])[0xDE, 0xAD, 0xBE, 0xEF])), @"example.com. 3600 IN TYPE65280 \# 4 DEADBEEF");
+		yield return () => (new DnsResourceRecord(Example, Hour, new DnsUnknownData(DnsRecordType.Caa, ReadOnlyMemory<byte>.Empty)) { Class = DnsClass.Any }, @"example.com. 3600 ANY CAA \# 0");
+		yield return () => (new DnsResourceRecord(DnsName.Parse("version.bind"), TimeSpan.Zero, new DnsTxtData(["9"u8.ToArray()])) { Class = DnsClass.Chaos }, @"version.bind. 0 CH TXT ""9""");
+		yield return () => (new DnsResourceRecord(DnsName.Parse(@"a\.b"), TimeSpan.Zero, new DnsCNameData(Example)) { Class = (DnsClass)99 }, @"a\.b. 0 CLASS99 CNAME example.com.");
+		yield return () => (new DnsResourceRecord(DnsName.Parse(@"acct\;prod.example"), TimeSpan.Zero, new DnsAddressData(IPAddress.Parse("192.0.2.1"))), @"acct\;prod.example. 0 IN A 192.0.2.1");
+	}
+
+	[Test]
+	[MethodDataSource(nameof(Lines))]
+	public async Task ToStringWritesALineOfAMasterFile(DnsResourceRecord record, string line)
+	{
+		await Assert.That(record.ToString()).IsEqualTo(line);
 	}
 
 	[Test]
@@ -38,31 +45,26 @@ public class DnsRecordTest
 	}
 
 	[Test]
+	public async Task EveryNamedTypeShowsItsMnemonic()
+	{
+		foreach (DnsRecordType type in Enum.GetValues<DnsRecordType>())
+		{
+			await Assert.That(new DnsQuestion(DnsName.Root, type).ToString()).IsEqualTo($". IN {type.ToString().ToUpperInvariant()}");
+		}
+	}
+
+	[Test]
 	public async Task AQuestionBuiltWithAnObjectInitializerIsOfClassIn()
 	{
 		DnsQuestion question = new() { Name = Example, Type = DnsRecordType.A };
-		byte[] encoded = new DnsMessage { Questions = [question] }.Encode();
 
-		// QTYPE and QCLASS end the message.
-		await Assert.That(Convert.ToHexString(encoded.AsSpan(encoded.Length - 4))).IsEqualTo("00010001");
 		await Assert.That(question).IsEqualTo(new DnsQuestion(Example, DnsRecordType.A));
 	}
 
 	[Test]
 	public async Task TheDefaultQuestionIsOfClassZero()
 	{
-		await Assert.That(default(DnsQuestion).Class).IsEqualTo((DnsClass)0);
-		DnsQuestion[] questions = new DnsQuestion[1];
-
-		await Assert.That(questions[0].ToString()).IsEqualTo(". CLASS0 TYPE0");
-	}
-
-	[Test]
-	public async Task OptionAndEdnsToStringShowCodesAndHex()
-	{
-		await Assert.That(new DnsEdnsOption(DnsEdnsOptionCode.Nsid, "ns1"u8.ToArray()).ToString()).IsEqualTo("NSID: 6E7331");
-		await Assert.That(new DnsEdnsOption((DnsEdnsOptionCode)65001, ReadOnlyMemory<byte>.Empty).ToString()).IsEqualTo("OPT=65001:");
-		await Assert.That(new DnsEdns().ToString()).IsEqualTo("; EDNS: version: 0, flags:; udp: 1232");
+		await Assert.That(default(DnsQuestion).ToString()).IsEqualTo(". CLASS0 TYPE0");
 	}
 
 	[Test]
@@ -92,7 +94,6 @@ public class DnsRecordTest
 
 		await Assert.That(() => new DnsResourceRecord(Example, TimeSpan.Zero, null!)).Throws<ArgumentNullException>().WithParameterName("Data");
 		await Assert.That(() => record with { Data = null! }).Throws<ArgumentNullException>();
-		await Assert.That(() => new DnsRequestContext(null!, DnsProtocol.Udp)).Throws<ArgumentNullException>().WithParameterName("Request");
 	}
 
 	[Test]
@@ -193,8 +194,8 @@ public class DnsRecordTest
 		await Assert.That(() => soa with { Minimum = TimeSpan.FromSeconds(-1) }).Throws<ArgumentOutOfRangeException>();
 
 		// The intervals go on the wire as 32-bit seconds.
-		DnsMessage message = new() { Answers = [new DnsResourceRecord(DnsName.Root, TimeSpan.Zero, soa)] };
-		await Assert.That(Convert.ToHexString(message.Encode().AsSpan(message.Encode().Length - 16))).IsEqualTo("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
+		byte[] encoded = new DnsMessage { Answers = [new DnsResourceRecord(DnsName.Root, TimeSpan.Zero, soa)] }.Encode();
+		await Assert.That(Convert.ToHexString(encoded.AsSpan(encoded.Length - 16))).IsEqualTo("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
 	}
 
 	[Test]
@@ -202,7 +203,6 @@ public class DnsRecordTest
 	{
 		DnsTxtData txt = new(["ab"u8.ToArray(), "c"u8.ToArray()]);
 		DnsUnknownData unknown = new(DnsRecordType.Caa, (byte[])[1, 2, 3]);
-		DnsEdnsOption option = new(DnsEdnsOptionCode.Cookie, (byte[])[1, 2, 3]);
 
 		await AssertEqual(txt, new DnsTxtData([new ReadOnlyMemory<byte>([0, (byte)'a', (byte)'b'], 1, 2), "c"u8.ToArray()]));
 		await Assert.That(txt).IsNotEqualTo(new DnsTxtData(["a"u8.ToArray(), "bc"u8.ToArray()]));
@@ -212,15 +212,6 @@ public class DnsRecordTest
 		await AssertEqual(unknown, new DnsUnknownData(DnsRecordType.Caa, (byte[])[1, 2, 3]));
 		await Assert.That(unknown).IsNotEqualTo(new DnsUnknownData(DnsRecordType.Caa, (byte[])[1, 2, 4]));
 		await Assert.That(unknown).IsNotEqualTo(new DnsUnknownData(DnsRecordType.Tlsa, (byte[])[1, 2, 3]));
-
-		await AssertEqual(option, new DnsEdnsOption(DnsEdnsOptionCode.Cookie, (byte[])[1, 2, 3]));
-		await Assert.That(option == new DnsEdnsOption(DnsEdnsOptionCode.Cookie, (byte[])[1, 2, 3])).IsTrue();
-		await Assert.That(option).IsNotEqualTo(new DnsEdnsOption(DnsEdnsOptionCode.Padding, (byte[])[1, 2, 3]));
-		await Assert.That(option).IsNotEqualTo(new DnsEdnsOption(DnsEdnsOptionCode.Cookie, (byte[])[1, 2]));
-
-		await AssertEqual(new DnsEdns { Options = [option] }, new DnsEdns { Options = [new DnsEdnsOption(DnsEdnsOptionCode.Cookie, (byte[])[1, 2, 3])] });
-		await Assert.That(new DnsEdns { Options = [option] }).IsNotEqualTo(new DnsEdns());
-		await Assert.That(new DnsEdns()).IsNotEqualTo(new DnsEdns { DnssecOk = true });
 	}
 
 	[Test]
@@ -240,9 +231,6 @@ public class DnsRecordTest
 		DnsResourceRecord longer = record with { Ttl = 2 * Hour };
 
 		await Assert.That(longer).IsNotEqualTo(record);
-
-		// Dynamic update compares records without their TTLs (RFC 2136, Sec. 1.1.1).
-		await Assert.That(longer == record with { Ttl = longer.Ttl }).IsTrue();
 	}
 
 	[Test]
@@ -264,16 +252,5 @@ public class DnsRecordTest
 			_ = DnsName.Parse(errors).TryEncode(data.AsSpan(first), out int second);
 			return data.AsSpan(0, first + second).ToArray();
 		}
-	}
-
-	private static async Task AssertLine(DnsResourceRecord record, string expected)
-	{
-		await Assert.That(record.ToString()).IsEqualTo(expected);
-	}
-
-	private static async Task AssertEqual<T>(T left, T right) where T : notnull
-	{
-		await Assert.That(left).IsEqualTo(right);
-		await Assert.That(left.GetHashCode()).IsEqualTo(right.GetHashCode());
 	}
 }

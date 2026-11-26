@@ -19,31 +19,29 @@ public sealed record DnsSoaData(DnsName PrimaryNameServer, DnsName ResponsibleMa
 {
 	private const int IntervalsLength = 5 * sizeof(uint);
 
-	private static readonly TimeSpan MaxInterval = TimeSpan.FromSeconds(uint.MaxValue);
-
 	/// <summary>
 	/// Gets how long secondary servers wait before they check the zone for a newer version, REFRESH.
 	/// </summary>
 	/// <exception cref="ArgumentOutOfRangeException">The value set is negative or greater than 2^32 − 1 seconds.</exception>
-	public TimeSpan Refresh { get; init => field = CheckInterval(value, nameof(Refresh)); } = CheckInterval(Refresh, nameof(Refresh));
+	public TimeSpan Refresh { get; init => field = WireSeconds.Check(value, nameof(Refresh)); } = WireSeconds.Check(Refresh, nameof(Refresh));
 
 	/// <summary>
 	/// Gets how long secondary servers wait before they retry a failed check, RETRY.
 	/// </summary>
 	/// <exception cref="ArgumentOutOfRangeException">The value set is negative or greater than 2^32 − 1 seconds.</exception>
-	public TimeSpan Retry { get; init => field = CheckInterval(value, nameof(Retry)); } = CheckInterval(Retry, nameof(Retry));
+	public TimeSpan Retry { get; init => field = WireSeconds.Check(value, nameof(Retry)); } = WireSeconds.Check(Retry, nameof(Retry));
 
 	/// <summary>
 	/// Gets how long secondary servers go on answering for the zone without a successful check, EXPIRE.
 	/// </summary>
 	/// <exception cref="ArgumentOutOfRangeException">The value set is negative or greater than 2^32 − 1 seconds.</exception>
-	public TimeSpan Expire { get; init => field = CheckInterval(value, nameof(Expire)); } = CheckInterval(Expire, nameof(Expire));
+	public TimeSpan Expire { get; init => field = WireSeconds.Check(value, nameof(Expire)); } = WireSeconds.Check(Expire, nameof(Expire));
 
 	/// <summary>
 	/// Gets how long resolvers may cache a negative answer from the zone, MINIMUM (RFC 2308, Sec. 4).
 	/// </summary>
 	/// <exception cref="ArgumentOutOfRangeException">The value set is negative or greater than 2^32 − 1 seconds.</exception>
-	public TimeSpan Minimum { get; init => field = CheckInterval(value, nameof(Minimum)); } = CheckInterval(Minimum, nameof(Minimum));
+	public TimeSpan Minimum { get; init => field = WireSeconds.Check(value, nameof(Minimum)); } = WireSeconds.Check(Minimum, nameof(Minimum));
 
 	/// <summary>
 	/// Gets <see cref="DnsRecordType.Soa" />.
@@ -55,7 +53,7 @@ public sealed record DnsSoaData(DnsName PrimaryNameServer, DnsName ResponsibleMa
 		PrimaryNameServer.AppendAbsolute(builder);
 		builder.Append(' ');
 		ResponsibleMailbox.AppendAbsolute(builder);
-		builder.Append($" {Serial} {ToSeconds(Refresh)} {ToSeconds(Retry)} {ToSeconds(Expire)} {ToSeconds(Minimum)}");
+		builder.Append($" {Serial} {WireSeconds.Of(Refresh)} {WireSeconds.Of(Retry)} {WireSeconds.Of(Expire)} {WireSeconds.Of(Minimum)}");
 	}
 
 	internal override void Write(ref DnsWireWriter writer)
@@ -63,10 +61,10 @@ public sealed record DnsSoaData(DnsName PrimaryNameServer, DnsName ResponsibleMa
 		writer.WriteName(PrimaryNameServer, compress: true);
 		writer.WriteName(ResponsibleMailbox, compress: true);
 		writer.WriteUInt32(Serial);
-		writer.WriteUInt32(ToSeconds(Refresh));
-		writer.WriteUInt32(ToSeconds(Retry));
-		writer.WriteUInt32(ToSeconds(Expire));
-		writer.WriteUInt32(ToSeconds(Minimum));
+		writer.WriteUInt32(WireSeconds.Of(Refresh));
+		writer.WriteUInt32(WireSeconds.Of(Retry));
+		writer.WriteUInt32(WireSeconds.Of(Expire));
+		writer.WriteUInt32(WireSeconds.Of(Minimum));
 	}
 
 	internal static DnsSoaData? Read(ref DnsWireReader reader)
@@ -84,17 +82,5 @@ public sealed record DnsSoaData(DnsName PrimaryNameServer, DnsName ResponsibleMa
 			TimeSpan.FromSeconds(BinaryPrimitives.ReadUInt32BigEndian(fields.Slice(8))),
 			TimeSpan.FromSeconds(BinaryPrimitives.ReadUInt32BigEndian(fields.Slice(12))),
 			TimeSpan.FromSeconds(BinaryPrimitives.ReadUInt32BigEndian(fields.Slice(16))));
-	}
-
-	private static TimeSpan CheckInterval(TimeSpan value, string paramName)
-	{
-		ArgumentOutOfRangeException.ThrowIfLessThan(value, TimeSpan.Zero, paramName);
-		ArgumentOutOfRangeException.ThrowIfGreaterThan(value, MaxInterval, paramName);
-		return value;
-	}
-
-	private static uint ToSeconds(TimeSpan value)
-	{
-		return (uint)(value.Ticks / TimeSpan.TicksPerSecond);
 	}
 }

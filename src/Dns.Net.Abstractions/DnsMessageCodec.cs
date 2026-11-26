@@ -44,22 +44,17 @@ internal static class DnsMessageCodec
 
 		if ((byte)message.Opcode > 0xF)
 		{
-			ThrowHelper.ThrowNotEncodable("The opcode is greater than 15, which is more than its 4 bits in the header can hold.");
+			throw new InvalidOperationException("The opcode is greater than 15, which is more than its 4 bits in the header can hold.");
 		}
 
 		if (responseCode > 0xFFF)
 		{
-			ThrowHelper.ThrowNotEncodable("The response code is greater than 4095, which is more than its 12 bits in the header and the OPT record can hold.");
+			throw new InvalidOperationException("The response code is greater than 4095, which is more than its 12 bits in the header and the OPT record can hold.");
 		}
 
 		if (responseCode > 0xF && edns is null)
 		{
-			ThrowHelper.ThrowNotEncodable("The response code is greater than 15, which needs EDNS: the OPT record holds its upper 8 bits.");
-		}
-
-		if (questions.Count > ushort.MaxValue || answers.Count > ushort.MaxValue || authorities.Count > ushort.MaxValue || additionalCount > ushort.MaxValue)
-		{
-			ThrowHelper.ThrowNotEncodable("A section has more than 65535 entries, which is more than its 16-bit count can hold.");
+			throw new InvalidOperationException("The response code is greater than 15, which needs EDNS: the OPT record holds its upper 8 bits.");
 		}
 
 		DnsWireWriter writer = new(buffer);
@@ -68,6 +63,7 @@ internal static class DnsMessageCodec
 		{
 			writer.WriteUInt16(message.Id);
 			writer.WriteUInt16(GetFlags(message, responseCode));
+			// Every entry takes at least 5 bytes, so a section of more than 65535 entries overflows the writer before a truncated count could be returned.
 			writer.WriteUInt16((ushort)questions.Count);
 			writer.WriteUInt16((ushort)answers.Count);
 			writer.WriteUInt16((ushort)authorities.Count);
@@ -82,12 +78,7 @@ internal static class DnsMessageCodec
 			}
 
 			// A TSIG or SIG(0) record must stay last (RFC 8945, Sec. 5.1; RFC 2931, Sec. 3.1), so the OPT record goes before it.
-			int beforeOpt = additionals.Count;
-
-			if (edns is not null && beforeOpt is not 0 && additionals[beforeOpt - 1].Type is DnsRecordType.Tsig or DnsRecordType.Sig)
-			{
-				--beforeOpt;
-			}
+			int beforeOpt = edns is not null && additionals is [.., { Type: DnsRecordType.Tsig or DnsRecordType.Sig }] ? additionals.Count - 1 : additionals.Count;
 
 			WriteRecords(ref writer, answers, 0, answers.Count);
 			WriteRecords(ref writer, authorities, 0, authorities.Count);
@@ -172,14 +163,14 @@ internal static class DnsMessageCodec
 
 			for (int i = 0; i < count; ++i)
 			{
-				if (!reader.TryReadName(out DnsName name) || !reader.TryReadUInt16(out ushort type) || !reader.TryReadUInt16(out ushort @class))
+				if (!TryReadQuestion(ref reader, out DnsQuestion question))
 				{
 					return false;
 				}
 
 				if (count is 1)
 				{
-					only = new DnsQuestion(name, (DnsRecordType)type, (DnsClass)@class);
+					only = question;
 				}
 			}
 
@@ -214,47 +205,17 @@ internal static class DnsMessageCodec
 
 	private static ushort GetFlags(DnsMessage message, int responseCode)
 	{
-		int flags = (byte)message.Opcode << 11 | responseCode & 0xF;
-
-		if (message.IsResponse)
-		{
-			flags |= ResponseFlag;
-		}
-
-		if (message.IsAuthoritativeAnswer)
-		{
-			flags |= AuthoritativeAnswerFlag;
-		}
-
-		if (message.IsTruncated)
-		{
-			flags |= TruncatedFlag;
-		}
-
-		if (message.IsRecursionDesired)
-		{
-			flags |= RecursionDesiredFlag;
-		}
-
-		if (message.IsRecursionAvailable)
-		{
-			flags |= RecursionAvailableFlag;
-		}
-
-		if (message.IsAuthenticData)
-		{
-			flags |= AuthenticDataFlag;
-		}
-
-		if (message.IsCheckingDisabled)
-		{
-			flags |= CheckingDisabledFlag;
-		}
-
+		int flags = (byte)message.Opcode << 11 | responseCode & 0xF
+			| (message.IsResponse ? ResponseFlag : 0)
+			| (message.IsAuthoritativeAnswer ? AuthoritativeAnswerFlag : 0)
+			| (message.IsTruncated ? TruncatedFlag : 0)
+			| (message.IsRecursionDesired ? RecursionDesiredFlag : 0)
+			| (message.IsRecursionAvailable ? RecursionAvailableFlag : 0)
+			| (message.IsAuthenticData ? AuthenticDataFlag : 0)
+			| (message.IsCheckingDisabled ? CheckingDisabledFlag : 0);
 		return (ushort)flags;
 	}
 
-	// Writes the records from start up to end.
 	private static void WriteRecords(ref DnsWireWriter writer, IReadOnlyList<DnsResourceRecord> records, int start, int end)
 	{
 		for (int i = start; i < end; ++i)
@@ -263,8 +224,7 @@ internal static class DnsMessageCodec
 			writer.WriteName(record.Name, compress: true);
 			writer.WriteUInt16((ushort)record.Type);
 			writer.WriteUInt16((ushort)record.Class);
-			// Whole seconds, truncated; the record keeps its TTL within 32 bits.
-			writer.WriteUInt32((uint)(record.Ttl.Ticks / TimeSpan.TicksPerSecond));
+			writer.WriteUInt32(WireSeconds.Of(record.Ttl));
 			int lengthOffset = writer.BeginLength();
 			record.Data.Write(ref writer);
 			writer.EndLength(lengthOffset);
@@ -296,36 +256,21 @@ internal static class DnsMessageCodec
 
 		for (int i = 0; i < questions.Length; ++i)
 		{
-			if (!reader.TryReadName(out DnsName name) || !reader.TryReadUInt16(out ushort type) || !reader.TryReadUInt16(out ushort @class))
+			if (!TryReadQuestion(ref reader, out questions[i]))
 			{
 				return null;
 			}
-
-			questions[i] = new DnsQuestion(name, (DnsRecordType)type, (DnsClass)@class);
 		}
 
 		DnsOpcode opcode = (DnsOpcode)(flags >> 11 & 0xF);
 		// In an UPDATE, data of class NONE is in the class of the zone (RFC 2136, Sec. 2.5.4); other messages read it as class IN.
-		DnsClass noneClass = opcode is DnsOpcode.Update && questions.Length is 1 ? questions[0].Class : DnsClass.Internet;
+		DnsClass noneClass = opcode is DnsOpcode.Update && questions is [{ Class: DnsClass zoneClass }] ? zoneClass : DnsClass.Internet;
 		DnsEdns? edns = null;
 		int upperResponseCode = 0;
-		DnsResourceRecord[]? answers = ReadRecords(ref reader, answerCount, isAdditional: false, noneClass, ref edns, ref upperResponseCode);
 
-		if (answers is null)
-		{
-			return null;
-		}
-
-		DnsResourceRecord[]? authorities = ReadRecords(ref reader, authorityCount, isAdditional: false, noneClass, ref edns, ref upperResponseCode);
-
-		if (authorities is null)
-		{
-			return null;
-		}
-
-		DnsResourceRecord[]? additionals = ReadRecords(ref reader, additionalCount, isAdditional: true, noneClass, ref edns, ref upperResponseCode);
-
-		if (additionals is null)
+		if (ReadRecords(ref reader, answerCount, isAdditional: false, noneClass, ref edns, ref upperResponseCode) is not { } answers
+			|| ReadRecords(ref reader, authorityCount, isAdditional: false, noneClass, ref edns, ref upperResponseCode) is not { } authorities
+			|| ReadRecords(ref reader, additionalCount, isAdditional: true, noneClass, ref edns, ref upperResponseCode) is not { } additionals)
 		{
 			return null;
 		}
@@ -353,15 +298,23 @@ internal static class DnsMessageCodec
 		};
 	}
 
+	private static bool TryReadQuestion(ref DnsWireReader reader, out DnsQuestion question)
+	{
+		if (reader.TryReadName(out DnsName name) && reader.TryReadUInt16(out ushort type) && reader.TryReadUInt16(out ushort @class))
+		{
+			question = new DnsQuestion(name, (DnsRecordType)type, (DnsClass)@class);
+			return true;
+		}
+
+		question = default;
+		return false;
+	}
+
 	// Reads count records, whose data in class NONE is in noneClass. The OPT record goes into edns and its upper response code bits into upperResponseCode (RFC 6891, Sec. 6.1.1).
 	private static DnsResourceRecord[]? ReadRecords(ref DnsWireReader reader, int count, bool isAdditional, DnsClass noneClass, ref DnsEdns? edns, ref int upperResponseCode)
 	{
-		if (count is 0)
-		{
-			return [];
-		}
-
-		DnsResourceRecord[] records = new DnsResourceRecord[count];
+		// Allocated at the first record that is not OPT, so that an additional section that holds only the OPT record allocates no array.
+		DnsResourceRecord[]? records = null;
 		int index = 0;
 
 		for (int i = 0; i < count; ++i)
@@ -417,7 +370,13 @@ internal static class DnsMessageCodec
 
 			// The TTL is unsigned (RFC 8767, Sec. 4).
 			TimeSpan timeToLive = TimeSpan.FromSeconds(ttl);
+			records ??= new DnsResourceRecord[count - i];
 			records[index++] = new DnsResourceRecord(name, timeToLive, data) { Class = (DnsClass)@class };
+		}
+
+		if (records is null)
+		{
+			return [];
 		}
 
 		return index == records.Length ? records : records.AsSpan(0, index).ToArray();

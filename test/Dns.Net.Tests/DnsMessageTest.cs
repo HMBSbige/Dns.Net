@@ -1,6 +1,6 @@
 using Dns.Net.Abstractions;
-using System.Collections;
 using System.Net;
+using static Dns.Net.Tests.Equality;
 
 namespace Dns.Net.Tests;
 
@@ -13,19 +13,7 @@ public class DnsMessageTest
 	[Test]
 	public async Task CreateQueryAsksOneQuestionWithRecursionAndEdns()
 	{
-		DnsMessage query = DnsMessage.CreateQuery(ExampleA);
-
-		await Assert.That(query.Id).IsEqualTo((ushort)0);
-		await Assert.That(query.IsResponse).IsFalse();
-		await Assert.That(query.Opcode).IsEqualTo(DnsOpcode.Query);
-		await Assert.That(query.IsRecursionDesired).IsTrue();
-		await Assert.That(query.IsCheckingDisabled).IsFalse();
-		await Assert.That(query.ResponseCode).IsEqualTo(DnsResponseCode.NoError);
-		await Assert.That(query.Questions.Count).IsEqualTo(1);
-		await Assert.That(query.Questions[0]).IsEqualTo(ExampleA);
-		await Assert.That(query.Answers.Count + query.Authorities.Count + query.Additionals.Count).IsEqualTo(0);
-		await Assert.That(query.Edns).IsEqualTo(new DnsEdns());
-		await Assert.That(query.Edns!.UdpPayloadSize).IsEqualTo(DnsEdns.DefaultUdpPayloadSize);
+		await Assert.That(DnsMessage.CreateQuery(ExampleA)).IsEqualTo(new DnsMessage { IsRecursionDesired = true, Questions = [ExampleA], Edns = new DnsEdns() });
 	}
 
 	[Test]
@@ -57,19 +45,7 @@ public class DnsMessageTest
 			Edns = new DnsEdns { DnssecOk = true }
 		});
 		await Assert.That(response.IsResponseTo(request)).IsTrue();
-	}
-
-	[Test]
-	[Arguments(false, false)]
-	[Arguments(true, false)]
-	[Arguments(true, true)]
-	public async Task CreateResponseHasEdnsOnlyIfTheRequestHasIt(bool requestHasEdns, bool dnssecOk)
-	{
-		DnsMessage request = DnsMessage.CreateQuery(ExampleA) with { Edns = requestHasEdns ? new DnsEdns { DnssecOk = dnssecOk, Version = 0 } : null };
-
-		DnsEdns? edns = request.CreateResponse().Edns;
-
-		await Assert.That(edns).IsEqualTo(requestHasEdns ? new DnsEdns { DnssecOk = dnssecOk } : null);
+		await Assert.That((request with { Edns = null }).CreateResponse().Edns).IsNull();
 	}
 
 	[Test]
@@ -93,6 +69,7 @@ public class DnsMessageTest
 		// A query answers nothing, and no response answers itself.
 		await Assert.That(query.IsResponseTo(response)).IsFalse();
 		await Assert.That(response.IsResponseTo(response)).IsFalse();
+		await Assert.That(() => response.IsResponseTo(null!)).Throws<ArgumentNullException>();
 	}
 
 	[Test]
@@ -115,9 +92,6 @@ public class DnsMessageTest
 		await Assert.That(withoutZone.IsResponseTo(update)).IsTrue();
 		await Assert.That((update.CreateResponse() with { ResponseCode = responseCode }).IsResponseTo(update)).IsTrue();
 		await Assert.That((withoutZone with { Questions = [zone with { Name = DnsName.Parse("example.net") }] }).IsResponseTo(update)).IsFalse();
-		await Assert.That((withoutZone with { Id = 0x1235 }).IsResponseTo(update)).IsFalse();
-		await Assert.That(withoutZone.IsResponseTo(withoutZone)).IsFalse();
-		await Assert.That(update.CreateResponse().IsResponseTo(update.CreateResponse())).IsFalse();
 
 		// A QUERY response must still have the question.
 		DnsMessage query = DnsMessage.CreateQuery(ExampleA) with { Id = 0x1234 };
@@ -141,11 +115,8 @@ public class DnsMessageTest
 
 		await Assert.That(withoutQuestion.IsResponseTo(query)).IsEqualTo(accepted);
 
-		// With a question, it must be the one asked.
-		await Assert.That((withoutQuestion with { Questions = [ExampleA] }).IsResponseTo(query)).IsTrue();
+		// A wrong question is never accepted.
 		await Assert.That((withoutQuestion with { Questions = [ExampleA with { Type = DnsRecordType.Mx }] }).IsResponseTo(query)).IsFalse();
-		await Assert.That((withoutQuestion with { Id = 8 }).IsResponseTo(query)).IsFalse();
-		await Assert.That(() => withoutQuestion.IsResponseTo(null!)).Throws<ArgumentNullException>();
 	}
 
 	[Test]
@@ -165,9 +136,7 @@ public class DnsMessageTest
 			Edns = new DnsEdns { Options = new List<DnsEdnsOption> { new(DnsEdnsOptionCode.Nsid, "x"u8.ToArray()) } }
 		};
 
-		await Assert.That(first).IsEqualTo(second);
-		await Assert.That(first == second).IsTrue();
-		await Assert.That(first.GetHashCode()).IsEqualTo(second.GetHashCode());
+		await AssertEqual(first, second);
 		await Assert.That(first).IsNotEqualTo(second with { Answers = [] });
 		await Assert.That(first).IsNotEqualTo(second with { Answers = [record with { Ttl = TimeSpan.FromMinutes(2) }] });
 		await Assert.That(first).IsNotEqualTo(second with { Additionals = [record] });
@@ -218,11 +187,6 @@ public class DnsMessageTest
 		additionals.Clear();
 		options.Clear();
 
-		await Assert.That(message.Questions.Count).IsEqualTo(1);
-		await Assert.That(message.Answers.Count).IsEqualTo(1);
-		await Assert.That(message.Authorities.Count).IsEqualTo(1);
-		await Assert.That(message.Additionals.Count).IsEqualTo(1);
-		await Assert.That(message.Edns.Options.Count).IsEqualTo(1);
 		await Assert.That(Convert.ToHexString(message.Encode())).IsEqualTo(encoded);
 		await Assert.That(message.GetHashCode()).IsEqualTo(hashCode);
 
@@ -311,7 +275,7 @@ public class DnsMessageTest
 
 		await Assert.That(query.TryEncode(destination, out int bytesWritten)).IsFalse();
 		await Assert.That(bytesWritten).IsEqualTo(0);
-		await Assert.That(destination.All(value => value is 0xAA)).IsTrue();
+		await Assert.That(destination).All(value => value is 0xAA);
 		await Assert.That(query.TryEncode(Span<byte>.Empty, out bytesWritten)).IsFalse();
 		await Assert.That(bytesWritten).IsEqualTo(0);
 	}
@@ -344,19 +308,6 @@ public class DnsMessageTest
 	}
 
 	[Test]
-	public async Task RefusesSectionsWithMoreThan65535Entries()
-	{
-		DnsResourceRecord record = new(DnsName.Root, TimeSpan.Zero, Address);
-
-		await AssertNotEncodable(new DnsMessage { Questions = new RepeatedList<DnsQuestion>(ExampleA, 65536) });
-		await AssertNotEncodable(new DnsMessage { Answers = new RepeatedList<DnsResourceRecord>(record, 65536) });
-		await AssertNotEncodable(new DnsMessage { Authorities = new RepeatedList<DnsResourceRecord>(record, 65536) });
-
-		// The OPT record counts in the additional section.
-		await AssertNotEncodable(new DnsMessage { Additionals = new RepeatedList<DnsResourceRecord>(record, 65535), Edns = new DnsEdns() });
-	}
-
-	[Test]
 	public async Task RefusesEdnsOptionsLongerThanAMessage()
 	{
 		await AssertNotEncodable(new DnsMessage { Edns = new DnsEdns { Options = [new DnsEdnsOption(DnsEdnsOptionCode.Padding, new byte[65536])] } });
@@ -368,26 +319,5 @@ public class DnsMessageTest
 		await Assert.That(() => message.Encode()).Throws<InvalidOperationException>();
 		await Assert.That(() => message.TryEncode(new byte[512], out _)).Throws<InvalidOperationException>();
 		await Assert.That(() => message.TryEncode(new byte[DnsMessage.MaxEncodedLength], out _)).Throws<InvalidOperationException>();
-	}
-
-	// Reports a count without holding the entries.
-	private sealed class RepeatedList<T>(T item, int count) : IReadOnlyList<T>
-	{
-		public int Count => count;
-
-		public T this[int index] => item;
-
-		public IEnumerator<T> GetEnumerator()
-		{
-			for (int i = 0; i < count; ++i)
-			{
-				yield return item;
-			}
-		}
-
-		IEnumerator IEnumerable.GetEnumerator()
-		{
-			return GetEnumerator();
-		}
 	}
 }

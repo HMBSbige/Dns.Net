@@ -1,65 +1,28 @@
 using Dns.Net.Abstractions;
 using System.Globalization;
+using static Dns.Net.Tests.Equality;
 
 namespace Dns.Net.Tests;
 
 public class DnsNameTest
 {
-	// Names at and around the limits of labels, lengths and escapes.
 	[Test]
-	[Arguments(null, false)]
-	[Arguments(@"", false)]
-	[Arguments(@".", true)]
-	[Arguments(@"..", false)]
-	[Arguments(@"a.b..com.", false)]
-	[Arguments(@"Donald\032E\.\032Eastlake\0323rd.example.", true)]
-	[Arguments(@"a\000\\\255z.example.", true)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.", true)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
-	[Arguments(@"\000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
-	[Arguments(@"\000\aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
-	[Arguments(@"\000\a\.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
-	[Arguments(@"\000\a\.\ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", true)]
-	[Arguments(@"\000.com", true)]
-	[Arguments(@"\255.com", true)]
-	[Arguments(@"\256.com", false)]
-	[Arguments(@"\300.com", false)]
-	[Arguments(@"\12.com", false)]
-	[Arguments(@"\1.com", false)]
-	[Arguments(@"\!.com", true)]
-	[Arguments(@"\x23.com", true)]
-	[Arguments(@"\1x3.com", false)]
-	[Arguments(@"\12x.com", false)]
-	[Arguments(@"\.", true)]
-	[Arguments(@"中文.域名", false)]
-	[Arguments(@"xn--fiq228c.xn--eqrt2g", true)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", false)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\x", true)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\1", false)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\12", false)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\123", true)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.", true)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)]
-	[Arguments(@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.a", false)]
-	public async Task TryParseAcceptsOnlyValidNames(string? name, bool expected)
+	[Arguments(@".")]
+	[Arguments(@"\000\a\.\ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+	[Arguments(@"\!.com")]
+	[Arguments(@"\x23.com")]
+	[Arguments(@"xn--fiq228c.xn--eqrt2g")]
+	public async Task ParseAcceptsValidNames(string name)
 	{
-		bool parsed = DnsName.TryParse(name, out DnsName result);
+		await Assert.That(DnsName.TryParse(name, out DnsName result)).IsTrue();
+		await Assert.That(DnsName.Parse(name)).IsEqualTo(result);
+	}
 
-		await Assert.That(parsed).IsEqualTo(expected);
-
-		if (name is null)
-		{
-			await Assert.That(() => DnsName.Parse(name!)).Throws<ArgumentNullException>();
-		}
-		else if (expected)
-		{
-			await Assert.That(DnsName.Parse(name)).IsEqualTo(result);
-		}
-		else
-		{
-			await Assert.That(() => DnsName.Parse(name)).Throws<FormatException>();
-		}
+	[Test]
+	public async Task ParseRejectsNull()
+	{
+		await Assert.That(DnsName.TryParse(null, out _)).IsFalse();
+		await Assert.That(() => DnsName.Parse(null!)).ThrowsExactly<ArgumentNullException>().WithParameterName("s");
 	}
 
 	[Test]
@@ -67,7 +30,6 @@ public class DnsNameTest
 	{
 		byte[] microsoft = [3, .. "www"u8, 9, .. "microsoft"u8, 3, .. "com"u8, 0];
 
-		await AssertEncoding(".", [0]);
 		await AssertEncoding("www.microsoft.com", microsoft);
 		await AssertEncoding("www.microsoft.com.", microsoft);
 		await AssertEncoding(@"Donald\032E\.\032Eastlake\0323rd.example.", [22, .. "Donald"u8, 32, .. "E."u8, 32, .. "Eastlake"u8, 32, .. "3rd"u8, 7, .. "example"u8, 0]);
@@ -84,34 +46,11 @@ public class DnsNameTest
 	[Arguments(@"\.", "01 2E 00")]
 	[Arguments(@"\\", "01 5C 00")]
 	[Arguments(@"\..", "01 2E 00")]
+	[Arguments(@"a\\.b", "02 61 5C 01 62 00")]
+	[Arguments("a\\\tb", "03 61 09 62 00")]
 	public async Task ParseTurnsEscapesIntoBytes(string name, string expected)
 	{
 		await AssertEncoding(name, Convert.FromHexString(expected.Replace(" ", string.Empty)));
-	}
-
-	[Test]
-	public async Task EscapedBackslashBeforeDotDoesNotEscapeTheDot()
-	{
-		DnsName name = DnsName.Parse(@"a\\.b");
-
-		await Assert.That(name.LabelCount).IsEqualTo(2);
-		await AssertEncoding(name, [2, (byte)'a', (byte)'\\', 1, (byte)'b', 0]);
-		await Assert.That(name.ToString()).IsEqualTo(@"a\\.b");
-	}
-
-	[Test]
-	public async Task ParseRejectsNamesLongerThan255BytesWhateverTheText()
-	{
-		string label63 = new('a', 63);
-		string tooLong = $"{label63}.{label63}.{label63}.{label63}";
-
-		await Assert.That(DnsName.TryParse(tooLong, out _)).IsFalse();
-		await Assert.That(() => DnsName.Parse(tooLong)).Throws<FormatException>();
-
-		// 4 labels of 61 escaped bytes encode to 4 × 62 + 1 = 249 bytes.
-		string escaped61 = string.Concat(Enumerable.Repeat(@"\000", 61));
-		DnsName name = DnsName.Parse($"{escaped61}.{escaped61}.{escaped61}.{escaped61}");
-		await Assert.That(name.EncodedLength).IsEqualTo(249);
 	}
 
 	[Test]
@@ -136,9 +75,11 @@ public class DnsNameTest
 		// 3 × 64 + (lastLabelLength + 1) + 1 bytes: 255 for 61, 256 for 62.
 		string label63 = new('a', 63);
 		string name = $"{label63}.{label63}.{label63}.{new string('b', lastLabelLength)}";
+		string escaped = string.Concat(name.Select(static c => c is '.' ? "." : $@"\{(int)c:D3}"));
 
 		await Assert.That(DnsName.TryParse(name, out DnsName result)).IsEqualTo(valid);
 		await Assert.That(DnsName.TryParse($"{name}.", out _)).IsEqualTo(valid);
+		await Assert.That(DnsName.TryParse(escaped, out _)).IsEqualTo(valid);
 
 		if (valid)
 		{
@@ -159,13 +100,6 @@ public class DnsNameTest
 	[Arguments("exémple.com")]
 	[Arguments("例子.测试")]
 	[Arguments(@"ex\ämple.com")]
-	public async Task ParseRejectsWhitespaceControlAndNonAsciiCharacters(string name)
-	{
-		await Assert.That(DnsName.TryParse(name, out _)).IsFalse();
-		await Assert.That(() => DnsName.Parse(name)).Throws<FormatException>();
-	}
-
-	[Test]
 	[Arguments("")]
 	[Arguments("..")]
 	[Arguments(".com")]
@@ -176,21 +110,13 @@ public class DnsNameTest
 	[Arguments(@"\1")]
 	[Arguments(@"\12")]
 	[Arguments(@"\1x3")]
+	[Arguments(@"\12x.com")]
 	[Arguments(@"\256")]
 	[Arguments(@"\999")]
-	public async Task ParseRejectsEmptyLabelsAndBadEscapes(string name)
+	public async Task ParseRejectsInvalidNames(string name)
 	{
 		await Assert.That(DnsName.TryParse(name, out _)).IsFalse();
-		await Assert.That(() => DnsName.Parse(name.AsSpan())).Throws<FormatException>();
-	}
-
-	[Test]
-	public async Task ParseConvertedInternationalizedName()
-	{
-		string ascii = new IdnMapping().GetAscii("例子.测试");
-
-		await Assert.That(ascii).IsEqualTo("xn--fsqu00a.xn--0zwm56d");
-		await Assert.That(DnsName.Parse(ascii).LabelCount).IsEqualTo(2);
+		await Assert.That(() => DnsName.Parse(name)).Throws<FormatException>();
 	}
 
 	[Test]
@@ -200,7 +126,6 @@ public class DnsNameTest
 		{
 			await Assert.That(root.IsRoot).IsTrue();
 			await Assert.That(root.LabelCount).IsEqualTo(0);
-			await Assert.That(root.EncodedLength).IsEqualTo(1);
 			await Assert.That(root.ToString()).IsEqualTo(".");
 			await Assert.That(root).IsEqualTo(DnsName.Root);
 			await AssertEncoding(root, [0]);
@@ -216,35 +141,11 @@ public class DnsNameTest
 	[Arguments(@"\a\(\033\126", @"a\(!~")]
 	[Arguments(@"\127\128\032\009", @"\127\128\032\009")]
 	[Arguments(@"a\\.b", @"a\\.b")]
+	[Arguments(@"acct\.\\\""\(\)\;\@\$prod.example", @"acct\.\\\""\(\)\;\@\$prod.example")]
 	public async Task ToStringEscapesSpecialCharactersAndNonPrintableBytes(DnsName name, string expected)
 	{
 		await Assert.That(name.ToString()).IsEqualTo(expected);
 		await Assert.That($"{name}").IsEqualTo(expected);
-	}
-
-	[Test]
-	[Arguments('.')]
-	[Arguments('\\')]
-	[Arguments('"')]
-	[Arguments('(')]
-	[Arguments(')')]
-	[Arguments(';')]
-	[Arguments('@')]
-	[Arguments('$')]
-	public async Task FormattingEscapesTheCharactersThatMasterFilesGiveAMeaning(char special)
-	{
-		// Characters with a meaning in master files (RFC 1035, Sec. 5.1).
-		DnsName name = DnsName.Parse($@"acct\{special}prod.example");
-		string expected = $@"acct\{special}prod.example";
-		char[] buffer = new char[expected.Length];
-
-		await Assert.That(name.LabelCount).IsEqualTo(2);
-		await Assert.That(name.ToString()).IsEqualTo(expected);
-		await Assert.That(name.TryFormat(buffer.AsSpan(0, expected.Length - 1), out int charsWritten)).IsFalse();
-		await Assert.That(name.TryFormat(buffer, out charsWritten)).IsTrue();
-		await Assert.That(charsWritten).IsEqualTo(expected.Length);
-		await Assert.That(new string(buffer)).IsEqualTo(expected);
-		await Assert.That(Convert.ToHexString(Encode(DnsName.Parse(name.ToString())))).IsEqualTo(Convert.ToHexString(Encode(name)));
 	}
 
 	[Test]
@@ -261,19 +162,18 @@ public class DnsNameTest
 	}
 
 	[Test]
-	public async Task ParseOfToStringReturnsTheSameBytes()
+	[Arguments(0)]
+	[Arguments(128)]
+	public async Task ParseOfToStringReturnsTheSameBytes(int start)
 	{
 		// Every byte value, in labels of up to 63 bytes, in two names that each stay within 255 bytes.
-		foreach (int start in (int[])[0, 128])
-		{
-			string text = string.Join('.', Enumerable.Range(0, 3).Select(label => string.Concat(Enumerable.Range(start + label * 43, Math.Min(43, start + 128 - (start + label * 43))).Select(value => $@"\{value:D3}"))));
-			DnsName name = DnsName.Parse(text);
-			byte[] encoded = Encode(name);
-			byte[] reparsed = Encode(DnsName.Parse(name.ToString()));
+		string text = string.Join('.', Enumerable.Range(start, 128).Chunk(43).Select(static label => string.Concat(label.Select(static value => $@"\{value:D3}"))));
+		DnsName name = DnsName.Parse(text);
+		byte[] encoded = Encode(name);
+		byte[] reparsed = Encode(DnsName.Parse(name.ToString()));
 
-			await Assert.That(encoded.Length).IsEqualTo(128 + 3 + 1);
-			await Assert.That(Convert.ToHexString(reparsed)).IsEqualTo(Convert.ToHexString(encoded));
-		}
+		await Assert.That(encoded.Length).IsEqualTo(128 + 3 + 1);
+		await Assert.That(Convert.ToHexString(reparsed)).IsEqualTo(Convert.ToHexString(encoded));
 	}
 
 	[Test]
@@ -282,12 +182,10 @@ public class DnsNameTest
 		DnsName lower = DnsName.Parse("www.example.com");
 		DnsName mixed = DnsName.Parse("WWW.Example.COM.");
 
-		await Assert.That(lower.Equals(mixed)).IsTrue();
+		await AssertEqual(lower, mixed);
 		await Assert.That(lower == mixed).IsTrue();
 		await Assert.That(lower != mixed).IsFalse();
 		await Assert.That(lower.Equals((object)mixed)).IsTrue();
-		await Assert.That(lower.GetHashCode()).IsEqualTo(mixed.GetHashCode());
-		await Assert.That(new HashSet<DnsName> { lower, mixed }).HasSingleItem();
 
 		// Folding every byte with 0x20 would equate these pairs; \192 and \224 are À and à.
 		await Assert.That(DnsName.Parse("@")).IsNotEqualTo(DnsName.Parse("`"));
@@ -314,6 +212,8 @@ public class DnsNameTest
 	[Arguments("example.com", ".", true)]
 	[Arguments(".", ".", true)]
 	[Arguments(".", "com", false)]
+	// The encoded name ends with the bytes of example.com, inside a label.
+	[Arguments(@"www\007example.com", "example.com", false)]
 	public async Task IsSubdomainOfComparesWholeTrailingLabels(DnsName name, DnsName ancestor, bool expected)
 	{
 		await Assert.That(name.IsSubdomainOf(ancestor)).IsEqualTo(expected);
@@ -397,11 +297,11 @@ public class DnsNameTest
 		await AssertNotDecoded([.. tooLong, 0]);
 	}
 
-	internal static byte[] Encode(DnsName name)
+	private static byte[] Encode(DnsName name)
 	{
-		byte[] buffer = new byte[DnsName.MaxEncodedLength];
-		name.TryEncode(buffer, out int bytesWritten);
-		return buffer.AsSpan(0, bytesWritten).ToArray();
+		byte[] encoded = new byte[name.EncodedLength];
+		name.TryEncode(encoded, out _);
+		return encoded;
 	}
 
 	private static async Task AssertEncoding(string name, byte[] expected)

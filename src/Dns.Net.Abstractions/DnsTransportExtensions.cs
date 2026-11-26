@@ -40,7 +40,7 @@ public static class DnsTransportExtensions
 
 			if (!DnsName.TryParse(name, out DnsName dnsName))
 			{
-				ThrowHelper.ThrowInvalidName("The name is not a valid domain name in presentation format.", nameof(name));
+				throw new ArgumentException("The name is not a valid domain name in presentation format.", nameof(name));
 			}
 
 			return transport.SendAsync(DnsMessage.CreateQuery(new DnsQuestion(dnsName, type)), cancellationToken);

@@ -25,8 +25,13 @@ public readonly record struct DnsQuestion(DnsName Name, DnsRecordType Type, DnsC
 	public override string ToString()
 	{
 		StringBuilder builder = new();
+		AppendTo(builder);
+		return builder.ToString();
+	}
+
+	internal void AppendTo(StringBuilder builder)
+	{
 		Name.AppendAbsolute(builder);
 		builder.Append($" {Class.Mnemonic} {Type.Mnemonic}");
-		return builder.ToString();
 	}
 }

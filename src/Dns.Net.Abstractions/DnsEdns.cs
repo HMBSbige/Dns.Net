@@ -81,7 +81,7 @@ public sealed record DnsEdns
 			&& UdpPayloadSize == other.UdpPayloadSize
 			&& Version == other.Version
 			&& Flags == other.Flags
-			&& ListEquality.SequenceEqual(Options, other.Options);
+			&& _options.AsSpan().SequenceEqual(other._options);
 	}
 
 	/// <summary>
@@ -136,9 +136,9 @@ public sealed record DnsEdns
 
 		builder.Append($" udp: {UdpPayloadSize}");
 
-		for (int i = 0; i < Options.Count; ++i)
+		foreach (DnsEdnsOption option in _options)
 		{
-			builder.AppendLine().Append($"; {Options[i]}");
+			builder.AppendLine().Append($"; {option}");
 		}
 	}
 
@@ -151,16 +151,8 @@ public sealed record DnsEdns
 		writer.WriteUInt32((uint)upperResponseCode << 24 | (uint)Version << 16 | (ushort)Flags);
 		int lengthOffset = writer.BeginLength();
 
-		for (int i = 0; i < _options.Length; ++i)
+		foreach (DnsEdnsOption option in _options)
 		{
-			DnsEdnsOption option = _options[i];
-
-			// No message could hold such an option.
-			if (option.Data.Length > ushort.MaxValue)
-			{
-				ThrowHelper.ThrowMessageTooLong();
-			}
-
 			writer.WriteUInt16((ushort)option.Code);
 			writer.WriteUInt16((ushort)option.Data.Length);
 			writer.WriteBytes(option.Data.Span);

@@ -15,7 +15,7 @@ namespace Dns.Net.Abstractions;
 /// </para>
 /// <para>
 /// The presentation format is that of master files (RFC 1035, Sec. 5.1), where the trailing dot is optional when parsing.
-/// Characters must be printable ASCII: convert an internationalized name with <see cref="IdnMapping.GetAscii(string)" /> first.
+/// An unescaped character must be ASCII from <c>!</c> to <c>~</c>; a backslash quotes the one ASCII character after it, and <c>\DDD</c> stands for any byte. Convert an internationalized name with <see cref="IdnMapping.GetAscii(string)" /> first.
 /// </para>
 /// </remarks>
 public readonly struct DnsName : IEquatable<DnsName>, ISpanParsable<DnsName>, ISpanFormattable
@@ -36,7 +36,7 @@ public readonly struct DnsName : IEquatable<DnsName>, ISpanParsable<DnsName>, IS
 
 	private const string InvalidEscape = "The name has a backslash that is followed neither by three decimal digits of value at most 255 nor by another ASCII character.";
 
-	private const string InvalidCharacter = "The name has a character that is not printable ASCII; escape it, or convert an internationalized name with IdnMapping.GetAscii first.";
+	private const string InvalidCharacter = "The name has a space, a control character or a character that is not ASCII; escape the first two, or convert an internationalized name with IdnMapping.GetAscii first.";
 
 	private const string LabelTooLong = "The name has a label longer than 63 bytes.";
 
@@ -87,7 +87,7 @@ public readonly struct DnsName : IEquatable<DnsName>, ISpanParsable<DnsName>, IS
 	public int EncodedLength => _encoded?.Length ?? 1;
 
 	// The uncompressed wire format.
-	internal ReadOnlySpan<byte> Encoded => _encoded is null ? [0] : _encoded;
+	internal ReadOnlySpan<byte> Encoded => _encoded is null ? "\0"u8 : _encoded;
 
 	/// <summary>
 	/// Parses a name in presentation format.
@@ -113,7 +113,7 @@ public readonly struct DnsName : IEquatable<DnsName>, ISpanParsable<DnsName>, IS
 	{
 		string? error = TryParseCore(s, out DnsName result);
 
-		return error is null ? result : ThrowHelper.ThrowFormat<DnsName>(error);
+		return error is null ? result : throw new FormatException(error);
 	}
 
 	/// <summary>
@@ -124,12 +124,6 @@ public readonly struct DnsName : IEquatable<DnsName>, ISpanParsable<DnsName>, IS
 	/// <returns><see langword="true" /> if <paramref name="s" /> is a valid name; otherwise, <see langword="false" />.</returns>
 	public static bool TryParse([NotNullWhen(true)] string? s, out DnsName result)
 	{
-		if (s is null)
-		{
-			result = default;
-			return false;
-		}
-
 		return TryParse(s.AsSpan(), out result);
 	}
 
@@ -337,7 +331,7 @@ public readonly struct DnsName : IEquatable<DnsName>, ISpanParsable<DnsName>, IS
 	// Appends the name as master files write it, with the trailing dot that makes it absolute.
 	internal void AppendAbsolute(StringBuilder builder)
 	{
-		builder.Append(CultureInfo.InvariantCulture, $"{this}");
+		builder.Append($"{this}");
 
 		if (!IsRoot)
 		{
@@ -345,7 +339,7 @@ public readonly struct DnsName : IEquatable<DnsName>, ISpanParsable<DnsName>, IS
 		}
 	}
 
-	// Compares bytes, ignoring the case of ASCII letters only (RFC 4343, Sec. 3).
+	// Compares bytes, ignoring the case of ASCII letters only (RFC 4343, Sec. 3); Ascii.EqualsIgnoreCase does not fit, as it reports any non-ASCII byte as a difference.
 	internal static bool EqualsIgnoreCase(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
 	{
 		if (left.Length != right.Length)
@@ -366,7 +360,7 @@ public readonly struct DnsName : IEquatable<DnsName>, ISpanParsable<DnsName>, IS
 
 	internal static byte ToLowerAscii(byte value)
 	{
-		return (uint)(value - 'A') <= 'Z' - 'A' ? (byte)(value | 0x20) : value;
+		return char.IsAsciiLetterUpper((char)value) ? (byte)(value | 0x20) : value;
 	}
 
 	// Parses s in a single pass, so that a backslash escapes exactly the one character after it, a dot or a backslash included.

@@ -8,9 +8,6 @@ namespace Dns.Net;
 [SupportedOSPlatform("android29.0")]
 internal static unsafe partial class AndroidResolver
 {
-	// The resolver answers with at most 8 KiB (MAXPACKET) today.
-	internal const int MaxAnswerLength = 65535;
-
 	private const short PollIn = 0x1;
 
 	private const int EIntr = 4;
@@ -19,9 +16,9 @@ internal static unsafe partial class AndroidResolver
 
 	private const int EfdCloexec = 0x80000;
 
-	private static readonly Lock PollerLock = new();
-
 	private static Poller? _poller;
+
+	private static object? _pollerLock;
 
 	/// <summary>
 	/// Sends <paramref name="message" /> on the network of <paramref name="networkHandle" /> and asynchronously reads the answer into <paramref name="answer" />.
@@ -29,10 +26,11 @@ internal static unsafe partial class AndroidResolver
 	/// <returns>A task whose result is the length of the answer.</returns>
 	/// <exception cref="IOException">The resolver failed.</exception>
 	/// <exception cref="OperationCanceledException"><paramref name="cancellationToken" /> was canceled before the answer arrived.</exception>
-	internal static Task<int> SendAsync(long networkHandle, ReadOnlySpan<byte> message, byte[] answer, CancellationToken cancellationToken)
+	public static Task<int> SendAsync(long networkHandle, ReadOnlySpan<byte> message, byte[] answer, CancellationToken cancellationToken)
 	{
 		// Before the query, so that a poller that fails to start leaves no descriptor open.
-		Poller poller = GetPoller();
+		// Not Lazy<T>, which would keep a failure, such as running out of descriptors, for good; with a lock, as a second poller would never stop.
+		Poller poller = LazyInitializer.EnsureInitialized(ref _poller, ref _pollerLock, static () => new Poller());
 		int fd;
 
 		fixed (byte* pointer = message)
@@ -41,22 +39,6 @@ internal static unsafe partial class AndroidResolver
 		}
 
 		return fd < 0 ? Task.FromException<int>(ResolverError(-fd)) : poller.WaitAsync(fd, answer, cancellationToken);
-	}
-
-	// Not Lazy<T>, which would keep a failure, such as running out of descriptors, for good.
-	private static Poller GetPoller()
-	{
-		Poller? poller = Volatile.Read(ref _poller);
-
-		if (poller is not null)
-		{
-			return poller;
-		}
-
-		lock (PollerLock)
-		{
-			return _poller ??= new Poller();
-		}
 	}
 
 	private static IOException ResolverError(int errno)
@@ -94,35 +76,23 @@ internal static unsafe partial class AndroidResolver
 		public short Revents;
 	}
 
-	private sealed class Query(Poller poller, int fd, byte[] answer, CancellationToken cancellationToken) : TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously)
+	private sealed class Query(Poller poller, int fd, byte[] answer, CancellationToken cancellationToken) : TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously), IThreadPoolWorkItem
 	{
 		private volatile bool _cancelRequested;
+
+		private CancellationTokenRegistration _registration;
 
 		public int Fd { get; } = fd;
 
 		public bool CancelRequested => _cancelRequested;
 
-		public CancellationTokenRegistration Registration { get; private set; }
-
-		private Poller Poller { get; } = poller;
-
 		public void Register()
 		{
-			if (!cancellationToken.CanBeCanceled)
-			{
-				return;
-			}
-
-			Registration = cancellationToken.UnsafeRegister(static state =>
-			{
-				Query query = (Query)state!;
-				query._cancelRequested = true;
-				query.Poller.Wake();
-			}, this);
+			_registration = cancellationToken.UnsafeRegister(static state => ((Query)state!).RequestCancel(), this);
 		}
 
 		// On the thread pool, as the rest of the answer may still be on its way.
-		public void Complete()
+		public void Execute()
 		{
 			int length;
 			int rcode;
@@ -133,7 +103,7 @@ internal static unsafe partial class AndroidResolver
 				length = ResNResult(Fd, &rcode, pointer, (nuint)answer.Length);
 			}
 
-			Registration.Dispose();
+			_registration.Dispose();
 
 			if (length < 0)
 			{
@@ -148,15 +118,21 @@ internal static unsafe partial class AndroidResolver
 		public void Cancel()
 		{
 			ResCancel(Fd);
-			Registration.Dispose();
+			_registration.Dispose();
 			TrySetCanceled(cancellationToken);
 		}
 
 		public void Fail(int errno)
 		{
 			ResCancel(Fd);
-			Registration.Dispose();
+			_registration.Dispose();
 			TrySetException(ResolverError(errno));
+		}
+
+		private void RequestCancel()
+		{
+			_cancelRequested = true;
+			poller.Wake();
 		}
 	}
 
@@ -177,14 +153,14 @@ internal static unsafe partial class AndroidResolver
 				throw ResolverError(Marshal.GetLastPInvokeError());
 			}
 
-			new Thread(Run) { IsBackground = true, Name = "Dns.Net resolver" }.Start();
+			new Thread(Run) { IsBackground = true, Name = "Dns.Net resolver" }.UnsafeStart();
 		}
 
 		public Task<int> WaitAsync(int fd, byte[] answer, CancellationToken cancellationToken)
 		{
 			Query query = new(this, fd, answer, cancellationToken);
 
-			// Before the poller can take the query, so that Complete and Cancel see the registration.
+			// Before the poller can take the query, so that Execute and Cancel see the registration.
 			query.Register();
 
 			lock (_lock)
@@ -208,7 +184,7 @@ internal static unsafe partial class AndroidResolver
 		{
 			List<Query> waiting = [];
 			List<Query> added = [];
-			PollFd[] fds = new PollFd[16];
+			PollFd[] fds = GC.AllocateUninitializedArray<PollFd>(16, pinned: true);
 
 			while (true)
 			{
@@ -236,7 +212,7 @@ internal static unsafe partial class AndroidResolver
 
 				if (fds.Length < count)
 				{
-					fds = new PollFd[Math.Max(fds.Length * 2, count)];
+					fds = GC.AllocateUninitializedArray<PollFd>(Math.Max(fds.Length * 2, count), pinned: true);
 				}
 
 				fds[0] = new PollFd { Fd = _wakeFd, Events = PollIn };
@@ -289,7 +265,7 @@ internal static unsafe partial class AndroidResolver
 
 					Query query = waiting[i];
 					waiting.RemoveAt(i);
-					ThreadPool.UnsafeQueueUserWorkItem(static query => query.Complete(), query, preferLocal: false);
+					ThreadPool.UnsafeQueueUserWorkItem(query, preferLocal: false);
 				}
 			}
 		}

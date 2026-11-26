@@ -28,21 +28,14 @@ public class DnsErrorResponseTest
 	}
 
 	[Test]
-	public async Task AMalformedEdnsOptionGetsFormErrWithEdns()
-	{
-		// The option claims 8 bytes, of which the OPT record holds 1.
-		byte[] request = Concat(Header(7, 0x0100, 1, 0, 0, 1), Question, Record([0], 41, [0x00, 0x0A, 0x00, 0x08, 1], ttl: 0, @class: 4096));
-
-		await AssertFormErr(request, new DnsMessage { Id = 7, IsRecursionDesired = true, Questions = [ExampleA], Edns = new DnsEdns() });
-	}
-
-	[Test]
+	[Arguments(0u, false)]
 	[Arguments(0x0000_8000u, true)]
 	[Arguments(0x0101_C001u, true)]
 	[Arguments(0x0000_7FFFu, false)]
 	public async Task OnlyTheDoBitOfTheRequestIsCopied(uint optTtl, bool dnssecOk)
 	{
 		// RFC 3225, Sec. 3. The OPT TTL holds the extended code, the version and the flags, DO first.
+		// The option claims 8 bytes, of which the OPT record holds 1.
 		byte[] request = Concat(Header(7, 0x0100, 1, 0, 0, 1), Question, Record([0], 41, [0x00, 0x0A, 0x00, 0x08, 1], ttl: optTtl, @class: 4096));
 
 		await AssertFormErr(request, new DnsMessage { Id = 7, IsRecursionDesired = true, Questions = [ExampleA], Edns = new DnsEdns { DnssecOk = dnssecOk } });

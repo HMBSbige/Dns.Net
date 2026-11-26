@@ -7,7 +7,7 @@ namespace Dns.Net.Abstractions;
 /// Represents a TXT record (RFC 1035, Sec. 3.3.14): a sequence of character strings, with the TTL of the record.
 /// </summary>
 /// <remarks>
-/// The type mirrors <see cref="System.Net.TxtRecord" />. The client decides how the strings are decoded; <see cref="DnsTxtData.Values" /> keeps the bytes.
+/// The type mirrors <see cref="System.Net.TxtRecord" />. <see cref="IDnsQueryRecord{TSelf}.CreateRecords" /> decodes each string with UTF-8, with U+FFFD for an invalid sequence; a client that maps the results of another resolver decodes as that resolver does. <see cref="DnsTxtData.Values" /> keeps the bytes.
 /// Equality compares the strings one by one, ordinally, rather than the lists.
 /// </remarks>
 /// <param name="Values">The character strings of the record.</param>
@@ -47,7 +47,7 @@ public readonly record struct DnsTxtRecord([AllowNull] IReadOnlyList<string> Val
 
 	static DnsTxtRecord[] IDnsQueryRecord<DnsTxtRecord>.CreateRecords(ReadOnlySpan<DnsResourceRecord> answers, TimeSpan ttl, DnsMessage response)
 	{
-		return QueryRecords.Create<DnsTxtRecord>(answers, ttl, static (data, recordTtl) => data is DnsTxtData { Values: var values } ? new DnsTxtRecord(Decode(values), recordTtl) : null);
+		return QueryRecords.Create(answers, ttl, static (DnsTxtData txt, TimeSpan recordTtl) => new DnsTxtRecord(Decode(txt.Values), recordTtl));
 
 		static string[] Decode(IReadOnlyList<ReadOnlyMemory<byte>> values)
 		{

@@ -38,7 +38,6 @@ public static class DnsClientExtensions
 		/// <param name="cancellationToken">The token used to cancel the query.</param>
 		/// <returns>A value task whose result holds the PTR records, in the order of the response.</returns>
 		/// <exception cref="ArgumentNullException"><paramref name="client" /> or <paramref name="address" /> is <see langword="null" />.</exception>
-		/// <exception cref="ArgumentException"><paramref name="address" /> is neither an IPv4 nor an IPv6 address.</exception>
 		/// <exception cref="OperationCanceledException"><paramref name="cancellationToken" /> was canceled.</exception>
 		public ValueTask<DnsQueryResult<DnsPtrRecord>> ResolvePtrAsync(IPAddress address, CancellationToken cancellationToken = default)
 		{
@@ -72,12 +71,12 @@ public static class DnsClientExtensions
 		/// </summary>
 		/// <remarks>
 		/// <para>
-		/// An IP address resolves to itself, and the special-use names <c>localhost</c>, <c>invalid</c> and <c>onion</c> and the names below them resolve or fail without a query (RFC 6761, Sec. 6.3 and 6.4; RFC 7686, Sec. 2).
-		/// Unlike in <see cref="System.Net.Dns" />, an empty name throws rather than standing for the local host, and no hosts file or search domain is used.
-		/// If the operating system does not support IPv6, <see cref="AddressFamily.InterNetworkV6" /> gives an empty result and <see cref="AddressFamily.Unspecified" /> asks only for IPv4.
+		/// An IP address resolves to itself, or to nothing if it is not of the family, and the special-use names <c>localhost</c>, <c>invalid</c> and <c>onion</c> and the names below them resolve or fail without a query (RFC 6761, Sec. 6.3 and 6.4; RFC 7686, Sec. 2).
+		/// Unlike in <see cref="System.Net.Dns" />, an empty name throws rather than standing for the local host, and the method itself consults no hosts file or search domain, though the client may.
+		/// If the operating system does not support IPv6, <see cref="AddressFamily.InterNetworkV6" /> gives an empty result and <see cref="AddressFamily.Unspecified" /> stands for <see cref="AddressFamily.InterNetwork" />.
 		/// </para>
 		/// <para>
-		/// Invalid arguments throw at once; a <see cref="SocketException" /> comes through the task, and an exception of the client comes through as it is.
+		/// Arguments that the method checks throw at once, though a token already canceled gives a canceled task before any check but those for <see langword="null" />; a <see cref="SocketException" /> comes through the task, and an exception of the client comes through as it is.
 		/// NODATA maps to <see cref="SocketError.NoData" />, NXDOMAIN to <see cref="SocketError.HostNotFound" />, SERVFAIL to <see cref="SocketError.TryAgain" />, and any other response code to <see cref="SocketError.NoRecovery" />.
 		/// </para>
 		/// </remarks>
@@ -112,10 +111,7 @@ public static class DnsClientExtensions
 			return ValueTask.FromCanceled<IPAddress[]>(cancellationToken);
 		}
 
-		if (family is not (AddressFamily.Unspecified or AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
-		{
-			throw new ArgumentOutOfRangeException(nameof(family), family, "The address family is neither Unspecified, InterNetwork nor InterNetworkV6.");
-		}
+		QueryArguments.CheckAddressFamily(family);
 
 		if (!osSupportsIPv6)
 		{
@@ -152,56 +148,38 @@ public static class DnsClientExtensions
 			throw new ArgumentException("The host name is empty; without a resolver of the operating system, it does not stand for the local host.", nameof(hostNameOrAddress));
 		}
 
-		if (SpecialUseNames.IsInvalid(hostNameOrAddress))
+		return SpecialUseNames.GetDomain(hostNameOrAddress) switch
 		{
-			return ValueTask.FromException<IPAddress[]>(CreateSocketException(SocketError.HostNotFound, $"The host name '{hostNameOrAddress}' is in the special-use domain invalid, which never resolves (RFC 6761, Sec. 6.4)."));
-		}
-
-		if (SpecialUseNames.IsOnion(hostNameOrAddress))
-		{
-			return ValueTask.FromException<IPAddress[]>(CreateSocketException(SocketError.HostNotFound, $"The host name '{hostNameOrAddress}' is in the special-use domain onion, which only Tor resolves; no query is sent for it (RFC 7686)."));
-		}
-
-		if (SpecialUseNames.IsLocalhost(hostNameOrAddress))
-		{
-			return ValueTask.FromResult(GetLoopbackAddresses(family));
-		}
-
-		return GetAddressesAsync(client.ResolveAddressesAsync(hostNameOrAddress, family, cancellationToken), hostNameOrAddress);
+			SpecialUseDomain.Invalid => ValueTask.FromException<IPAddress[]>(CreateSocketException(SocketError.HostNotFound, $"The host name '{hostNameOrAddress}' is in the special-use domain invalid, which never resolves (RFC 6761, Sec. 6.4).")),
+			SpecialUseDomain.Onion => ValueTask.FromException<IPAddress[]>(CreateSocketException(SocketError.HostNotFound, $"The host name '{hostNameOrAddress}' is in the special-use domain onion, which only Tor resolves; no query is sent for it (RFC 7686).")),
+			SpecialUseDomain.Localhost => ValueTask.FromResult(GetLoopbackAddresses(family)),
+			_ => GetAddressesAsync(client.ResolveAddressesAsync(hostNameOrAddress, family, cancellationToken), hostNameOrAddress)
+		};
 	}
 
 	private static string BuildReverseLookupName(IPAddress address)
 	{
+		// IPAddress.AddressFamily is not virtual, and is always InterNetwork or InterNetworkV6.
 		Span<byte> bytes = stackalloc byte[16];
+		_ = address.TryWriteBytes(bytes, out _);
 
-		switch (address.AddressFamily)
+		if (address.AddressFamily is AddressFamily.InterNetwork)
 		{
-			case AddressFamily.InterNetwork:
-			{
-				_ = address.TryWriteBytes(bytes, out _);
-				return string.Create(CultureInfo.InvariantCulture, $"{bytes[3]}.{bytes[2]}.{bytes[1]}.{bytes[0]}.in-addr.arpa");
-			}
-			case AddressFamily.InterNetworkV6:
-			{
-				_ = address.TryWriteBytes(bytes, out _);
-				Span<char> nibbles = stackalloc char[bytes.Length * 4];
-
-				for (int i = 0; i < bytes.Length; ++i)
-				{
-					byte value = bytes[bytes.Length - 1 - i];
-					nibbles[i * 4] = ToHexDigit(value & 0xF);
-					nibbles[i * 4 + 1] = '.';
-					nibbles[i * 4 + 2] = ToHexDigit(value >> 4);
-					nibbles[i * 4 + 3] = '.';
-				}
-
-				return string.Concat(nibbles, "ip6.arpa");
-			}
-			default:
-			{
-				throw new ArgumentException("The address is neither an IPv4 nor an IPv6 address.", nameof(address));
-			}
+			return string.Create(CultureInfo.InvariantCulture, $"{bytes[3]}.{bytes[2]}.{bytes[1]}.{bytes[0]}.in-addr.arpa");
 		}
+
+		Span<char> nibbles = stackalloc char[bytes.Length * 4];
+
+		for (int i = 0; i < bytes.Length; ++i)
+		{
+			byte value = bytes[bytes.Length - 1 - i];
+			nibbles[i * 4] = ToHexDigit(value & 0xF);
+			nibbles[i * 4 + 1] = '.';
+			nibbles[i * 4 + 2] = ToHexDigit(value >> 4);
+			nibbles[i * 4 + 3] = '.';
+		}
+
+		return string.Concat(nibbles, "ip6.arpa");
 
 		static char ToHexDigit(int value)
 		{
@@ -211,15 +189,11 @@ public static class DnsClientExtensions
 
 	private static IPAddress[] GetLoopbackAddresses(AddressFamily family)
 	{
-		// New instances, so that the caller may change them, as the scope of an IPv6 address.
-		IPAddress ipv4 = new(IPAddress.Loopback.GetAddressBytes());
-		IPAddress ipv6 = new(IPAddress.IPv6Loopback.GetAddressBytes());
-
 		return family switch
 		{
-			AddressFamily.InterNetwork => [ipv4],
-			AddressFamily.InterNetworkV6 => [ipv6],
-			_ => [ipv6, ipv4]
+			AddressFamily.InterNetwork => [IPAddressCopy.Of(IPAddress.Loopback)],
+			AddressFamily.InterNetworkV6 => [IPAddressCopy.Of(IPAddress.IPv6Loopback)],
+			_ => [IPAddressCopy.Of(IPAddress.IPv6Loopback), IPAddressCopy.Of(IPAddress.Loopback)]
 		};
 	}
 

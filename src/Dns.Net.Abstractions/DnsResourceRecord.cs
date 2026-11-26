@@ -5,7 +5,7 @@ namespace Dns.Net.Abstractions;
 /// <summary>
 /// Represents a resource record (RFC 1035, Sec. 3.2.1): an owner name, a class, a TTL and typed data.
 /// </summary>
-/// <remarks>Equality also compares what encoding drops, such as the scope of an IPv6 address or fractions of a second.</remarks>
+/// <remarks>Equality compares the TTL too, unlike the comparison of records in dynamic update (RFC 2136, Sec. 1.1.1), and also what encoding drops, such as the scope of an IPv6 address or fractions of a second.</remarks>
 /// <param name="Name">The owner name.</param>
 /// <param name="Ttl">How long the record may be cached, from zero to 2^32 − 1 seconds.</param>
 /// <param name="Data">The data, which sets the type.</param>
@@ -13,14 +13,12 @@ namespace Dns.Net.Abstractions;
 /// <exception cref="ArgumentNullException"><paramref name="Data" /> is <see langword="null" />.</exception>
 public sealed record DnsResourceRecord(DnsName Name, TimeSpan Ttl, DnsRecordData Data)
 {
-	private static readonly TimeSpan MaxTtl = TimeSpan.FromSeconds(uint.MaxValue);
-
 	/// <summary>
 	/// Gets how long the record may be cached, from zero to 2^32 − 1 seconds (RFC 8767, Sec. 4).
 	/// </summary>
 	/// <remarks>Encoding drops any fraction of a second.</remarks>
 	/// <exception cref="ArgumentOutOfRangeException">The value set is negative or greater than 2^32 − 1 seconds.</exception>
-	public TimeSpan Ttl { get; init => field = CheckTtl(value); } = CheckTtl(Ttl);
+	public TimeSpan Ttl { get; init => field = WireSeconds.Check(value, nameof(Ttl)); } = WireSeconds.Check(Ttl, nameof(Ttl));
 
 	/// <summary>
 	/// Gets the data, which sets <see cref="Type" />.
@@ -46,17 +44,15 @@ public sealed record DnsResourceRecord(DnsName Name, TimeSpan Ttl, DnsRecordData
 	public override string ToString()
 	{
 		StringBuilder builder = new();
-		Name.AppendAbsolute(builder);
-		builder.Append($" {Ttl.Ticks / TimeSpan.TicksPerSecond} {Class.Mnemonic} {Type.Mnemonic} ");
-		Data.AppendPresentation(builder);
+		AppendTo(builder);
 		return builder.ToString();
 	}
 
-	private static TimeSpan CheckTtl(TimeSpan ttl)
+	internal void AppendTo(StringBuilder builder)
 	{
-		ArgumentOutOfRangeException.ThrowIfLessThan(ttl, TimeSpan.Zero, nameof(Ttl));
-		ArgumentOutOfRangeException.ThrowIfGreaterThan(ttl, MaxTtl, nameof(Ttl));
-		return ttl;
+		Name.AppendAbsolute(builder);
+		builder.Append($" {WireSeconds.Of(Ttl)} {Class.Mnemonic} {Type.Mnemonic} ");
+		Data.AppendPresentation(builder);
 	}
 
 	private static DnsRecordData CheckData(DnsRecordData data)

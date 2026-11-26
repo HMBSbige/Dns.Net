@@ -15,8 +15,9 @@ public interface IDnsTransport
 	/// </summary>
 	/// <param name="query">The query.</param>
 	/// <param name="cancellationToken">The token used to cancel the exchange.</param>
-	/// <returns>The response.</returns>
+	/// <returns>A value task whose result is the response.</returns>
 	/// <exception cref="ArgumentNullException"><paramref name="query" /> is <see langword="null" />.</exception>
 	/// <exception cref="InvalidOperationException"><paramref name="query" /> cannot be encoded.</exception>
+	/// <exception cref="OperationCanceledException"><paramref name="cancellationToken" /> was canceled.</exception>
 	ValueTask<DnsMessage> SendAsync(DnsMessage query, CancellationToken cancellationToken = default);
 }

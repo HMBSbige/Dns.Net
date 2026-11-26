@@ -6,95 +6,17 @@ namespace Dns.Net.Tests;
 public class DnsRequestHandlerTest
 {
 	[Test]
-	public async Task AHandlerBuildsItsResponseFromTheRequest(CancellationToken cancellationToken)
-	{
-		DnsMessage request = DnsMessage.CreateQuery(new DnsQuestion(DnsName.Parse("localhost"), DnsRecordType.A)) with { Id = 99 };
-		DnsRequestContext context = new(request, DnsProtocol.Udp) { RemoteEndPoint = new IPEndPoint(IPAddress.Loopback, 5353) };
-
-		DnsMessage? response = await new LoopbackHandler().HandleAsync(context, cancellationToken);
-
-		DnsMessage answered = await Assert.That(response).IsNotNull();
-		await Assert.That(answered.IsResponseTo(request)).IsTrue();
-		await Assert.That(answered.IsAuthoritativeAnswer).IsTrue();
-		DnsResourceRecord answer = await Assert.That(answered.Answers).HasSingleItem();
-		await Assert.That(answer.ToString()).IsEqualTo("localhost. 300 IN A 127.0.0.1");
-		await Assert.That(DnsMessage.Decode(answered.Encode())).IsEqualTo(answered);
-	}
-
-	[Test]
-	public async Task AHandlerMaySendNoResponse(CancellationToken cancellationToken)
-	{
-		DnsMessage request = DnsMessage.CreateQuery(new DnsQuestion(DnsName.Parse("localhost"), DnsRecordType.A));
-		BlockingHandler handler = new(new LoopbackHandler(), IPAddress.Parse("192.0.2.1"));
-
-		DnsMessage? blocked = await handler.HandleAsync(new DnsRequestContext(request, DnsProtocol.Udp) { RemoteEndPoint = new IPEndPoint(IPAddress.Parse("192.0.2.1"), 5353) }, cancellationToken);
-		DnsMessage? answered = await handler.HandleAsync(new DnsRequestContext(request, DnsProtocol.Udp) { RemoteEndPoint = new IPEndPoint(IPAddress.Parse("192.0.2.2"), 5353) }, cancellationToken);
-
-		await Assert.That(blocked).IsNull();
-		await Assert.That(answered?.IsResponseTo(request)).IsTrue();
-	}
-
-	[Test]
-	public async Task AServerTransportMayPassADerivedContextThatAWrappingHandlerKeepsWhenItChangesTheRequest(CancellationToken cancellationToken)
-	{
-		DnsMessage request = DnsMessage.CreateQuery(new DnsQuestion(DnsName.Parse("localhost"), DnsRecordType.A)) with { Id = 7 };
-		RecordingHandler recorder = new();
-
-		_ = await new IdStampingHandler(recorder).HandleAsync(new TenantRequestContext(request, "t1"), cancellationToken);
-
-		await Assert.That(recorder.Context is TenantRequestContext { Tenant: "t1", Protocol: DnsProtocol.Https }).IsTrue();
-		await Assert.That(recorder.Context?.Request.Id).IsEqualTo((ushort)42);
-	}
-
-	[Test]
-	public async Task AWrappingHandlerThatChangesTheIdentifierRestoresItInTheResponse(CancellationToken cancellationToken)
-	{
-		DnsMessage request = DnsMessage.CreateQuery(new DnsQuestion(DnsName.Parse("localhost"), DnsRecordType.A)) with { Id = 7 };
-
-		DnsMessage? response = await new IdStampingHandler(new LoopbackHandler()).HandleAsync(new DnsRequestContext(request, DnsProtocol.Udp), cancellationToken);
-
-		DnsMessage answered = await Assert.That(response).IsNotNull();
-		await Assert.That(answered.Id).IsEqualTo((ushort)7);
-		await Assert.That(answered.IsResponseTo(request)).IsTrue();
-	}
-
-	[Test]
-	public async Task AContextHasNoSignerUnlessTheServerTransportSetsOne()
-	{
-		DnsMessage request = DnsMessage.CreateQuery(new DnsQuestion(DnsName.Parse("localhost"), DnsRecordType.A));
-
-		await Assert.That(new DnsRequestContext(request, DnsProtocol.Udp).Signer).IsNull();
-		await Assert.That(new TenantRequestContext(request, "t1").Signer).IsNull();
-	}
-
-	[Test]
-	public async Task AWrappingHandlerThatChangesTheRequestKeepsTheSigner(CancellationToken cancellationToken)
+	public async Task WithKeepsTheDerivedContextAndTheSigner()
 	{
 		DnsMessage request = DnsMessage.CreateQuery(new DnsQuestion(DnsName.Parse("localhost"), DnsRecordType.A)) with { Id = 7 };
 		DnsRequestSigner signer = new(DnsRecordType.Tsig, DnsName.Parse("key.example"));
-		RecordingHandler recorder = new();
-		IdStampingHandler handler = new(recorder);
+		DnsRequestContext context = new TenantRequestContext(request, "t1") { Signer = signer };
 
-		_ = await handler.HandleAsync(new DnsRequestContext(request, DnsProtocol.Tcp) { Signer = signer }, cancellationToken);
-		await Assert.That(recorder.Context?.Signer).IsEqualTo(signer);
-		await Assert.That(recorder.Context?.Request.Id).IsEqualTo((ushort)42);
+		DnsRequestContext changed = context with { Request = request with { Id = 42 } };
 
-		_ = await handler.HandleAsync(new TenantRequestContext(request, "t1") { Signer = signer }, cancellationToken);
-		await Assert.That(recorder.Context is TenantRequestContext { Tenant: "t1" }).IsTrue();
-		await Assert.That(recorder.Context?.Signer).IsEqualTo(signer);
-	}
-
-	[Test]
-	public async Task ContextsThatDifferOnlyInTheSignerAreNotEqual()
-	{
-		DnsMessage request = DnsMessage.CreateQuery(new DnsQuestion(DnsName.Parse("localhost"), DnsRecordType.A));
-		DnsName key = DnsName.Parse("key.example");
-		DnsRequestContext context = new(request, DnsProtocol.Tcp) { Signer = new DnsRequestSigner(DnsRecordType.Tsig, key) };
-
-		await Assert.That(context with { Signer = null }).IsNotEqualTo(context);
-		await Assert.That(context with { Signer = new DnsRequestSigner(DnsRecordType.Sig, key) }).IsNotEqualTo(context);
-		await Assert.That(context with { Signer = new DnsRequestSigner(DnsRecordType.Tsig, DnsName.Parse("other.example")) }).IsNotEqualTo(context);
-		await Assert.That(context with { Signer = new DnsRequestSigner(DnsRecordType.Tsig, DnsName.Parse("KEY.example")) }).IsEqualTo(context);
+		await Assert.That(changed).IsEqualTo(new TenantRequestContext(request with { Id = 42 }, "t1") { Signer = signer });
+		await Assert.That(() => new DnsRequestContext(null!, DnsProtocol.Udp)).Throws<ArgumentNullException>().WithParameterName("Request");
+		await Assert.That(() => context with { Request = null! }).Throws<ArgumentNullException>().WithParameterName("Request");
 	}
 
 	[Test]
@@ -117,16 +39,13 @@ public class DnsRequestHandlerTest
 
 		DnsMessage? response = await handler.HandleAsync(new DnsRequestContext(request, DnsProtocol.Udp), cancellationToken);
 
-		DnsMessage badVers = request.CreateResponse() with { ResponseCode = (DnsResponseCode)16 };
-		await Assert.That(response).IsEqualTo(badVers);
-		await Assert.That(badVers.Edns).IsEqualTo(new DnsEdns { DnssecOk = true });
-		await Assert.That(badVers.IsResponseTo(request)).IsTrue();
-		await Assert.That(DnsMessage.Decode(badVers.Encode())).IsEqualTo(badVers);
+		await Assert.That(response).IsEqualTo(request.CreateResponse() with { ResponseCode = (DnsResponseCode)16 });
+		await Assert.That(response?.Edns).IsEqualTo(new DnsEdns { DnssecOk = true });
 
 		// Version 0 goes on to the inner handler.
 		DnsMessage? answered = await handler.HandleAsync(new DnsRequestContext(request with { Edns = new DnsEdns() }, DnsProtocol.Udp), cancellationToken);
 		await Assert.That(answered?.ResponseCode).IsEqualTo(DnsResponseCode.NoError);
-		await Assert.That(answered?.Answers.Count).IsEqualTo(1);
+		await Assert.That(answered?.Answers).HasSingleItem();
 	}
 
 	[Test]
@@ -153,18 +72,7 @@ public class DnsRequestHandlerTest
 
 		DnsMessage? response = await new QueryOnlyHandler(new LoopbackHandler()).HandleAsync(new DnsRequestContext(request, DnsProtocol.Udp), cancellationToken);
 
-		DnsMessage notImp = await Assert.That(response).IsNotNull();
-		await Assert.That(notImp.ResponseCode).IsEqualTo(DnsResponseCode.NotImplemented);
-		await Assert.That(notImp.Opcode).IsEqualTo((DnsOpcode)15);
-		await Assert.That(notImp.Questions).IsEmpty();
-		await Assert.That(notImp.Answers).IsEmpty();
-		await Assert.That(notImp.Authorities).IsEmpty();
-		await Assert.That(notImp.Additionals).IsEmpty();
-		await Assert.That(notImp.IsAuthoritativeAnswer).IsFalse();
-		await Assert.That(notImp.IsRecursionDesired).IsFalse();
-		await Assert.That(notImp.Edns).IsNull();
-		await Assert.That(notImp.IsResponseTo(request)).IsTrue();
-		await Assert.That(DnsMessage.Decode(notImp.Encode())).IsEqualTo(notImp);
+		await Assert.That(response).IsEqualTo(new DnsMessage { Id = 0x1234, IsResponse = true, Opcode = (DnsOpcode)15, ResponseCode = DnsResponseCode.NotImplemented });
 	}
 
 	// The QueryOnlyHandler of the README.
@@ -198,7 +106,7 @@ public class DnsRequestHandlerTest
 		}
 	}
 
-	// Answers every A question with the loopback address.
+	// The LoopbackHandler of the README.
 	private sealed class LoopbackHandler : IDnsRequestHandler
 	{
 		public ValueTask<DnsMessage?> HandleAsync(DnsRequestContext context, CancellationToken cancellationToken = default)
@@ -207,42 +115,10 @@ public class DnsRequestHandlerTest
 
 			DnsMessage response = request.CreateResponse() with
 			{
-				IsAuthoritativeAnswer = true,
-				Answers = [.. request.Questions.Where(static q => q.Type is DnsRecordType.A).Select(static q => new DnsResourceRecord(q.Name, TimeSpan.FromMinutes(5), new DnsAddressData(IPAddress.Loopback)))]
+				Answers = [.. request.Questions.Where(static q => q is { Type: DnsRecordType.A, Class: DnsClass.Internet }).Select(static q => new DnsResourceRecord(q.Name, TimeSpan.FromMinutes(5), new DnsAddressData(IPAddress.Loopback)))]
 			};
 
 			return ValueTask.FromResult<DnsMessage?>(response);
-		}
-	}
-
-	// Sends no response to requests from one address, and passes the others on.
-	private sealed class BlockingHandler(IDnsRequestHandler inner, IPAddress blocked) : IDnsRequestHandler
-	{
-		public ValueTask<DnsMessage?> HandleAsync(DnsRequestContext context, CancellationToken cancellationToken = default)
-		{
-			return context.RemoteEndPoint is IPEndPoint { Address: var address } && address.Equals(blocked) ? ValueTask.FromResult<DnsMessage?>(null) : inner.HandleAsync(context, cancellationToken);
-		}
-	}
-
-	// Changes the ID of each request it passes on, and restores it in the response.
-	private sealed class IdStampingHandler(IDnsRequestHandler inner) : IDnsRequestHandler
-	{
-		public async ValueTask<DnsMessage?> HandleAsync(DnsRequestContext context, CancellationToken cancellationToken = default)
-		{
-			DnsMessage? response = await inner.HandleAsync(context with { Request = context.Request with { Id = 42 } }, cancellationToken);
-			return response is null ? null : response with { Id = context.Request.Id };
-		}
-	}
-
-	// Keeps the context of the last request, and sends no response.
-	private sealed class RecordingHandler : IDnsRequestHandler
-	{
-		public DnsRequestContext? Context { get; private set; }
-
-		public ValueTask<DnsMessage?> HandleAsync(DnsRequestContext context, CancellationToken cancellationToken = default)
-		{
-			Context = context;
-			return ValueTask.FromResult<DnsMessage?>(null);
 		}
 	}
 

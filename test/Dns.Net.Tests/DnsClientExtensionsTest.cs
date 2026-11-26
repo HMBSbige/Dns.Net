@@ -121,7 +121,8 @@ public class DnsClientExtensionsTest
 	[Arguments("0.0.0.0")]
 	[Arguments("::")]
 	[Arguments("0:0:0:0:0:0:0:0")]
-	public async Task TheUnspecifiedAddressesThrowAtOnce(string host)
+	[Arguments("")]
+	public async Task HostsThatStandForNoHostThrowAtOnce(string host)
 	{
 		RecordingClient client = new() { Addresses = TwoAddresses };
 
@@ -151,20 +152,15 @@ public class DnsClientExtensionsTest
 	}
 
 	[Test]
-	public async Task AnEmptyNameThrowsAtOnce()
-	{
-		RecordingClient client = new() { Addresses = TwoAddresses };
-
-		await Assert.That(() => { _ = client.GetHostAddressesAsync(""); }).ThrowsExactly<ArgumentException>().WithParameterName("hostNameOrAddress");
-		await Assert.That(client.Calls).IsEmpty();
-	}
-
-	[Test]
 	[Arguments("invalid")]
 	[Arguments("INVALID")]
 	[Arguments("invalid.")]
 	[Arguments("host.invalid")]
 	[Arguments("a.b.Invalid.")]
+	// IdnMapping maps these separators to dots in every globalization mode.
+	[Arguments("host\u3002invalid")]
+	[Arguments("host\uFF0Einvalid")]
+	[Arguments("host\uFF61invalid.")]
 	public async Task NamesInInvalidFailWithoutAQuery(string host)
 	{
 		RecordingClient client = new() { Addresses = TwoAddresses };
@@ -221,6 +217,12 @@ public class DnsClientExtensionsTest
 	[Arguments("LocalHost.", AddressFamily.Unspecified, new[] { "::1", "127.0.0.1" }, new[] { "127.0.0.1" })]
 	[Arguments("app.localhost", AddressFamily.InterNetwork, new[] { "127.0.0.1" }, new[] { "127.0.0.1" })]
 	[Arguments("a.b.LOCALHOST.", AddressFamily.InterNetworkV6, new[] { "::1" }, new string[] { })]
+	// IdnMapping maps these separators to dots in every globalization mode.
+	[Arguments("printer\u3002localhost", AddressFamily.InterNetwork, new[] { "127.0.0.1" }, new[] { "127.0.0.1" })]
+	[Arguments("printer\uFF0Elocalhost", AddressFamily.InterNetwork, new[] { "127.0.0.1" }, new[] { "127.0.0.1" })]
+	[Arguments("printer\uFF61localhost", AddressFamily.InterNetwork, new[] { "127.0.0.1" }, new[] { "127.0.0.1" })]
+	[Arguments("localhost\u3002", AddressFamily.InterNetwork, new[] { "127.0.0.1" }, new[] { "127.0.0.1" })]
+	[Arguments("例え.localhost", AddressFamily.InterNetwork, new[] { "127.0.0.1" }, new[] { "127.0.0.1" })]
 	public async Task NamesInLocalhostResolveToLoopbackWithoutAQuery(string host, AddressFamily family, string[] expected, string[] expectedWithoutIPv6, CancellationToken cancellationToken)
 	{
 		RecordingClient client = new() { Addresses = TwoAddresses };
@@ -230,49 +232,6 @@ public class DnsClientExtensionsTest
 
 		await Assert.That(Text(addresses)).IsEquivalentTo(expected, CollectionOrdering.Matching);
 		await Assert.That(Text(withoutIPv6)).IsEquivalentTo(expectedWithoutIPv6, CollectionOrdering.Matching);
-		await Assert.That(client.Calls).IsEmpty();
-	}
-
-	[Test]
-	public async Task TheOverloadForBothFamiliesPutsIPv6FirstForLocalhost(CancellationToken cancellationToken)
-	{
-		RecordingClient client = new() { Addresses = TwoAddresses };
-
-		IPAddress[] addresses = await client.GetHostAddressesAsync("localhost", cancellationToken);
-
-		string[] expected = Socket.OSSupportsIPv6 ? ["::1", "127.0.0.1"] : ["127.0.0.1"];
-		await Assert.That(Text(addresses)).IsEquivalentTo(expected, CollectionOrdering.Matching);
-		await Assert.That(client.Calls).IsEmpty();
-	}
-
-	[Test]
-	[Arguments("printer\u3002localhost")]
-	[Arguments("printer\uFF0Elocalhost")]
-	[Arguments("printer\uFF61localhost")]
-	[Arguments("localhost\u3002")]
-	[Arguments("例え.localhost")]
-	public async Task NamesWhoseAsciiFormIsInLocalhostResolveToLoopbackWithoutAQuery(string host, CancellationToken cancellationToken)
-	{
-		// IdnMapping maps these separators to dots in every globalization mode.
-		RecordingClient client = new() { Addresses = TwoAddresses };
-
-		IPAddress[] addresses = await client.GetHostAddressesAsync(host, AddressFamily.InterNetwork, cancellationToken);
-
-		await Assert.That(Text(addresses)).IsEquivalentTo(["127.0.0.1"], CollectionOrdering.Matching);
-		await Assert.That(client.Calls).IsEmpty();
-	}
-
-	[Test]
-	[Arguments("host\u3002invalid")]
-	[Arguments("host\uFF0Einvalid")]
-	[Arguments("host\uFF61invalid.")]
-	public async Task NamesWhoseAsciiFormIsInInvalidFailWithoutAQuery(string host)
-	{
-		RecordingClient client = new() { Addresses = TwoAddresses };
-
-		SocketException? exception = await Assert.That(async () => await client.GetHostAddressesAsync(host, AddressFamily.InterNetwork)).ThrowsExactly<SocketException>();
-
-		await Assert.That(exception!.SocketErrorCode).IsEqualTo(SocketError.HostNotFound);
 		await Assert.That(client.Calls).IsEmpty();
 	}
 
@@ -482,7 +441,20 @@ public class DnsClientExtensionsTest
 		await Assert.That(cached.Records[0].Address.ToString()).IsEqualTo("fe80::1%3");
 	}
 
-	// GetHostAddressesAsync with the given OS support for IPv6.
+	[Test]
+	[Arguments(AddressFamily.Unspecified)]
+	[Arguments(AddressFamily.InterNetworkV6)]
+	public async Task EachCallGetsItsOwnLoopbackAddresses(AddressFamily family, CancellationToken cancellationToken)
+	{
+		RecordingClient client = new();
+
+		IPAddress[] first = await Resolve(client, "localhost", family, osSupportsIPv6: true, cancellationToken);
+		first[0].ScopeId = 1;
+		IPAddress[] second = await Resolve(client, "localhost", family, osSupportsIPv6: true, cancellationToken);
+
+		await Assert.That(second[0].ToString()).IsEqualTo("::1");
+	}
+
 	private static ValueTask<IPAddress[]> Resolve(IDnsClient client, string host, AddressFamily family, bool osSupportsIPv6, CancellationToken cancellationToken)
 	{
 		return DnsClientExtensions.GetHostAddressesCoreAsync(client, host, family, osSupportsIPv6, cancellationToken);

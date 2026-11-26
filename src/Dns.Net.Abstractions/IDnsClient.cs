@@ -11,7 +11,10 @@ namespace Dns.Net.Abstractions;
 /// An outcome of DNS, such as NXDOMAIN or SERVFAIL, comes back in <see cref="DnsQueryResult{T}.ResponseCode" />; each implementation documents its exceptions.
 /// Names in results have no trailing dot, and the root is <c>"."</c>.
 /// </para>
-/// <para>Arguments are checked before the value task is returned. Implementations must allow concurrent calls on one instance.</para>
+/// <para>
+/// A null or empty name and an unsupported address family throw before the value task is returned; a name that is otherwise invalid throws then or fails later, as each implementation documents.
+/// Implementations must allow concurrent calls on one instance.
+/// </para>
 /// </remarks>
 public interface IDnsClient
 {
@@ -27,7 +30,7 @@ public interface IDnsClient
 	/// <param name="cancellationToken">The token used to cancel the queries.</param>
 	/// <returns>A value task whose result holds the address records, in the order of the response.</returns>
 	/// <exception cref="ArgumentNullException"><paramref name="name" /> is <see langword="null" />.</exception>
-	/// <exception cref="ArgumentException"><paramref name="name" /> is empty, or not a valid name for the implementation.</exception>
+	/// <exception cref="ArgumentException"><paramref name="name" /> is empty, or not a valid name for an implementation that checks names at the call.</exception>
 	/// <exception cref="ArgumentOutOfRangeException"><paramref name="addressFamily" /> is not <see cref="AddressFamily.Unspecified" />, <see cref="AddressFamily.InterNetwork" /> or <see cref="AddressFamily.InterNetworkV6" />.</exception>
 	/// <exception cref="OperationCanceledException"><paramref name="cancellationToken" /> was canceled.</exception>
 	ValueTask<DnsQueryResult<DnsAddressRecord>> ResolveAddressesAsync(string name, AddressFamily addressFamily, CancellationToken cancellationToken = default);
@@ -40,7 +43,7 @@ public interface IDnsClient
 	/// <param name="cancellationToken">The token used to cancel the query.</param>
 	/// <returns>A value task whose result holds the records, in the order of the response.</returns>
 	/// <exception cref="ArgumentNullException"><paramref name="name" /> is <see langword="null" />.</exception>
-	/// <exception cref="ArgumentException"><paramref name="name" /> is empty, or not a valid name for the implementation.</exception>
+	/// <exception cref="ArgumentException"><paramref name="name" /> is empty, or not a valid name for an implementation that checks names at the call.</exception>
 	/// <exception cref="OperationCanceledException"><paramref name="cancellationToken" /> was canceled.</exception>
 	ValueTask<DnsQueryResult<TRecord>> ResolveAsync<TRecord>(string name, CancellationToken cancellationToken = default) where TRecord : IDnsQueryRecord<TRecord>;
 }

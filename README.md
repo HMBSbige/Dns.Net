@@ -52,7 +52,7 @@ When no response arrives, it returns SERVFAIL on Windows and throws on other pla
 It resolves addresses and SRV, MX, TXT, CNAME, PTR and NS records; `ResolveAsync` throws `NotSupportedException` for any other type.
 Names come back without escapes, so `a\.b.example` reads as `a.b.example`; `DnsClient` keeps the escapes.
 
-On Android, where .NET cannot find the system's servers, `new SystemDnsClient()` resolves through a `DnsClient` over `AndroidDnsTransport`, and needs Android 10 (API level 29); results then follow the rules of `DnsClient`.
+On Android, where .NET cannot find the system's servers, `new SystemDnsClient()` resolves through a `DnsClient` over `AndroidDnsTransport`, and needs Android 10 (API level 29); results then follow the rules of a `DnsClient` with `QueriesOnionNames` set to `true`, except that SERVFAIL, NOTIMP and REFUSED over UDP throw `IOException`, as the resolver of Android reports them as timeouts.
 
 ```csharp
 using System.Net;
@@ -77,8 +77,8 @@ DnsQueryResult<DnsTxtRecord> txt = await custom.ResolveAsync<DnsTxtRecord>("exam
 ```
 
 `GetHostAddressesAsync` works like `System.Net.Dns.GetHostAddressesAsync`, over any `IDnsClient`.
-Without a query, an IP address resolves to itself, a name in `localhost` to the loopback addresses, and a name in `invalid` or `onion` fails with `SocketError.HostNotFound`.
-It consults no hosts file, search domain or mDNS, and an empty name throws `ArgumentException`.
+Without a query, an IP address resolves to itself if it is of the requested family, a name in `localhost` to the loopback addresses, and a name in `invalid` or `onion` fails with `SocketError.HostNotFound`.
+It adds no hosts file, search domain or mDNS lookup of its own, though the client may (`SystemDnsClient` on Windows answers from the hosts file), and an empty name throws `ArgumentException`.
 
 ```csharp
 using System.Net;
@@ -107,7 +107,8 @@ Its `ResolveAsync<TRecord>` takes any record type that implements `IDnsQueryReco
 It is a stub resolver: it expects a recursive resolver behind the transport.
 It answers a name in `onion` with NXDOMAIN without a query, unless `QueriesOnionNames` is `true`.
 
-`AndroidDnsTransport` sends queries through the DNS resolver of Android 10 (API level 29) or later, with the servers, Private DNS and cache of the network; it takes the value of `Network.getNetworkHandle()` for a network other than the default one.
+`AndroidDnsTransport` sends queries through the DNS resolver of Android 10 (API level 29) or later, with the servers, Private DNS and cache of the network, for answers of up to 8 KiB; it takes the value of `Network.getNetworkHandle()` for a network other than the default one.
+Over UDP, the resolver reports SERVFAIL, NOTIMP or REFUSED from every server as a timeout, so `SendAsync` throws `IOException` instead of returning the response.
 
 The example passes each query to a handler in the same process.
 

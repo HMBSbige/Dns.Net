@@ -124,12 +124,12 @@ internal ref struct DnsWireReader
 		int segmentStart = position;
 		int resume = -1;
 		int pointers = 0;
+		name = default;
 
 		while (true)
 		{
 			if (position >= end)
 			{
-				name = default;
 				return FailOverrun(pointers);
 			}
 
@@ -148,14 +148,12 @@ internal ref struct DnsWireReader
 
 				if (next > end)
 				{
-					name = default;
 					return FailOverrun(pointers);
 				}
 
 				// The label and the root label that ends the name must both fit.
 				if (length + 1 + label >= DnsName.MaxEncodedLength)
 				{
-					name = default;
 					return Fail(NameTooLong);
 				}
 
@@ -168,13 +166,11 @@ internal ref struct DnsWireReader
 			// 01 in the top bits marks the extended label types (RFC 6891, Sec. 5) and 10 is unallocated.
 			if (label < 0xC0)
 			{
-				name = default;
 				return Fail(ReservedLabelType);
 			}
 
 			if (end - position < 2)
 			{
-				name = default;
 				return FailOverrun(pointers);
 			}
 
@@ -182,19 +178,16 @@ internal ref struct DnsWireReader
 
 			if (target >= segmentStart)
 			{
-				name = default;
 				return Fail(BadPointer);
 			}
 
 			if (target < HeaderLength)
 			{
-				name = default;
 				return Fail(HeaderPointer);
 			}
 
 			if (++pointers > MaxPointers)
 			{
-				name = default;
 				return Fail(TooManyPointers);
 			}
 

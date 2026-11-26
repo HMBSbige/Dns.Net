@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net;
 
 namespace Dns.Net.Abstractions;
@@ -64,10 +63,11 @@ internal static class DnsMnemonics
 			DnsOpcode.Status => "STATUS",
 			DnsOpcode.Notify => "NOTIFY",
 			DnsOpcode.Update => "UPDATE",
-			_ => ((byte)opcode).ToString(CultureInfo.InvariantCulture)
+			_ => ((byte)opcode).ToString()
 		};
 	}
 
+	// System.Net.DnsResponseCode names only codes 0 to 5, so the switch is on the number.
 	extension(DnsResponseCode code)
 	{
 		public string Mnemonic => (ushort)code switch
@@ -85,7 +85,7 @@ internal static class DnsMnemonics
 			10 => "NOTZONE",
 			16 => "BADVERS",
 			23 => "BADCOOKIE",
-			_ => ((ushort)code).ToString(CultureInfo.InvariantCulture)
+			_ => ((ushort)code).ToString()
 		};
 	}
 

@@ -7,18 +7,46 @@ namespace Dns.Net.Abstractions;
 /// Represents the data of a TXT record, a sequence of character strings (RFC 1035, Sec. 3.3.14).
 /// </summary>
 /// <remarks>Decoding gives the data of a TXT record without a string as <see cref="DnsUnknownData" />.</remarks>
-/// <param name="Values">The character strings, at least one, each of up to 255 bytes.</param>
-/// <exception cref="ArgumentNullException"><paramref name="Values" /> is <see langword="null" />.</exception>
-/// <exception cref="ArgumentException"><paramref name="Values" /> is empty or has a string longer than 255 bytes.</exception>
-public sealed record DnsTxtData(IReadOnlyList<ReadOnlyMemory<byte>> Values) : DnsRecordData
+public sealed record DnsTxtData : DnsRecordData
 {
+	private readonly ReadOnlyMemory<byte>[] _values;
+
+	// Named like the property, as positional records name their parameters, so that named arguments and named positional patterns such as DnsTxtData(Values: ...) work as on the other record data types.
+#pragma warning disable IDE1006
+	/// <summary>
+	/// Initializes the data with a copy of a list of character strings.
+	/// </summary>
+	/// <param name="Values">The character strings, at least one, each of up to 255 bytes.</param>
+	/// <exception cref="ArgumentNullException"><paramref name="Values" /> is <see langword="null" />.</exception>
+	/// <exception cref="ArgumentException"><paramref name="Values" /> is empty or has a string longer than 255 bytes.</exception>
+	public DnsTxtData(IReadOnlyList<ReadOnlyMemory<byte>> Values)
+	{
+		_values = CheckValues(Values);
+	}
+
+	/// <summary>
+	/// Deconstructs the data into its character strings.
+	/// </summary>
+	/// <param name="Values">The character strings.</param>
+	public void Deconstruct(out IReadOnlyList<ReadOnlyMemory<byte>> Values)
+	{
+		Values = _values;
+	}
+#pragma warning restore IDE1006
+
+	// The decoder's own strings, which nothing else references, need no copy.
+	private DnsTxtData(ReadOnlyMemory<byte>[] values)
+	{
+		_values = values;
+	}
+
 	/// <summary>
 	/// Gets the character strings, at least one, each of up to 255 bytes, in no particular encoding.
 	/// </summary>
 	/// <remarks>The record holds a copy of the list, but shares the bytes, which must not be changed afterwards.</remarks>
 	/// <exception cref="ArgumentNullException">The value set is <see langword="null" />.</exception>
 	/// <exception cref="ArgumentException">The value set is empty or has a string longer than 255 bytes.</exception>
-	public IReadOnlyList<ReadOnlyMemory<byte>> Values { get; init => field = CheckValues(value); } = CheckValues(Values);
+	public IReadOnlyList<ReadOnlyMemory<byte>> Values { get => _values; init => _values = CheckValues(value); }
 
 	/// <summary>
 	/// Gets <see cref="DnsRecordType.Txt" />.
@@ -37,14 +65,14 @@ public sealed record DnsTxtData(IReadOnlyList<ReadOnlyMemory<byte>> Values) : Dn
 			return true;
 		}
 
-		if (other is null || Values.Count != other.Values.Count)
+		if (other is null || _values.Length != other._values.Length)
 		{
 			return false;
 		}
 
-		for (int i = 0; i < Values.Count; ++i)
+		for (int i = 0; i < _values.Length; ++i)
 		{
-			if (!Values[i].Span.SequenceEqual(other.Values[i].Span))
+			if (!_values[i].Span.SequenceEqual(other._values[i].Span))
 			{
 				return false;
 			}
@@ -61,11 +89,10 @@ public sealed record DnsTxtData(IReadOnlyList<ReadOnlyMemory<byte>> Values) : Dn
 	{
 		HashCode hash = new();
 
-		for (int i = 0; i < Values.Count; ++i)
+		foreach (ReadOnlyMemory<byte> value in _values)
 		{
-			ReadOnlySpan<byte> value = Values[i].Span;
 			hash.Add(value.Length);
-			hash.AddBytes(value);
+			hash.AddBytes(value.Span);
 		}
 
 		return hash.ToHashCode();
@@ -74,7 +101,7 @@ public sealed record DnsTxtData(IReadOnlyList<ReadOnlyMemory<byte>> Values) : Dn
 	// Quoted strings, with quotes and backslashes escaped and other bytes outside printable ASCII written as \DDD.
 	internal override void AppendPresentation(StringBuilder builder)
 	{
-		for (int i = 0; i < Values.Count; ++i)
+		for (int i = 0; i < _values.Length; ++i)
 		{
 			if (i > 0)
 			{
@@ -83,7 +110,7 @@ public sealed record DnsTxtData(IReadOnlyList<ReadOnlyMemory<byte>> Values) : Dn
 
 			builder.Append('"');
 
-			foreach (byte value in Values[i].Span)
+			foreach (byte value in _values[i].Span)
 			{
 				if (value is (byte)'"' or (byte)'\\')
 				{
@@ -105,12 +132,11 @@ public sealed record DnsTxtData(IReadOnlyList<ReadOnlyMemory<byte>> Values) : Dn
 
 	internal override void Write(ref DnsWireWriter writer)
 	{
-		for (int i = 0; i < Values.Count; ++i)
+		foreach (ReadOnlyMemory<byte> value in _values)
 		{
-			ReadOnlySpan<byte> value = Values[i].Span;
 			Debug.Assert(value.Length <= byte.MaxValue);
 			writer.WriteUInt8((byte)value.Length);
-			writer.WriteBytes(value);
+			writer.WriteBytes(value.Span);
 		}
 	}
 

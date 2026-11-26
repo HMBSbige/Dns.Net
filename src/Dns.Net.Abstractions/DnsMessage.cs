@@ -142,10 +142,9 @@ public sealed record DnsMessage
 	/// <returns>A query with identifier 0 and <paramref name="question" /> as its only question.</returns>
 	public static DnsMessage CreateQuery(DnsQuestion question)
 	{
-		return new DnsMessage
+		return new DnsMessage([question], [], [], [])
 		{
 			IsRecursionDesired = true,
-			Questions = [question],
 			Edns = new DnsEdns()
 		};
 	}
@@ -189,7 +188,7 @@ public sealed record DnsMessage
 	/// Determines whether the message is a response to <paramref name="query" />, as a transport checks before it accepts one.
 	/// </summary>
 	/// <remarks>
-	/// The message must be a response with the identifier, opcode and questions of <paramref name="query" />, whose names compare regardless of case.
+	/// <paramref name="query" /> must be a query rather than a response, and the message a response with the identifier, opcode and questions of <paramref name="query" />, whose names compare regardless of case.
 	/// A FORMERR or NOTIMP response, or one to an UPDATE, may have no questions instead.
 	/// </remarks>
 	/// <param name="query">The query.</param>
@@ -203,7 +202,7 @@ public sealed record DnsMessage
 			&& !query.IsResponse
 			&& Id == query.Id
 			&& Opcode == query.Opcode
-			&& (ListEquality.SequenceEqual(Questions, query.Questions) || _questions.Length is 0 && (Opcode is DnsOpcode.Update || ResponseCode is DnsResponseCode.FormatError or DnsResponseCode.NotImplemented));
+			&& (_questions.AsSpan().SequenceEqual(query._questions) || _questions.Length is 0 && (Opcode is DnsOpcode.Update || ResponseCode is DnsResponseCode.FormatError or DnsResponseCode.NotImplemented));
 	}
 
 	/// <summary>
@@ -213,7 +212,7 @@ public sealed record DnsMessage
 	/// <param name="bytesWritten">The length of the message in bytes, or 0 on failure.</param>
 	/// <returns><see langword="true" /> if <paramref name="destination" /> is long enough; otherwise, <see langword="false" />, with <paramref name="destination" /> unchanged.</returns>
 	/// <exception cref="InvalidOperationException">
-	/// <see cref="Opcode" /> or <see cref="ResponseCode" /> is out of range, a section has more than 65535 entries, or the message would be longer than <see cref="MaxEncodedLength" /> bytes.
+	/// <see cref="Opcode" /> or <see cref="ResponseCode" /> is out of range, or the message would be longer than <see cref="MaxEncodedLength" /> bytes.
 	/// </exception>
 	public bool TryEncode(Span<byte> destination, out int bytesWritten)
 	{
@@ -250,7 +249,7 @@ public sealed record DnsMessage
 	/// </summary>
 	/// <returns>The message in wire format.</returns>
 	/// <exception cref="InvalidOperationException">
-	/// <see cref="Opcode" /> or <see cref="ResponseCode" /> is out of range, a section has more than 65535 entries, or the message would be longer than <see cref="MaxEncodedLength" /> bytes.
+	/// <see cref="Opcode" /> or <see cref="ResponseCode" /> is out of range, or the message would be longer than <see cref="MaxEncodedLength" /> bytes.
 	/// </exception>
 	public byte[] Encode()
 	{
@@ -277,7 +276,7 @@ public sealed record DnsMessage
 	public static DnsMessage Decode(ReadOnlySpan<byte> source)
 	{
 		DnsMessage? message = DnsMessageCodec.Decode(source, out string? error);
-		return message ?? ThrowHelper.ThrowInvalidData<DnsMessage>(error);
+		return message ?? throw new InvalidDataException(error);
 	}
 
 	/// <summary>
@@ -324,10 +323,10 @@ public sealed record DnsMessage
 			&& IsCheckingDisabled == other.IsCheckingDisabled
 			&& ResponseCode == other.ResponseCode
 			&& Edns == other.Edns
-			&& ListEquality.SequenceEqual(Questions, other.Questions)
-			&& ListEquality.SequenceEqual(Answers, other.Answers)
-			&& ListEquality.SequenceEqual(Authorities, other.Authorities)
-			&& ListEquality.SequenceEqual(Additionals, other.Additionals);
+			&& _questions.AsSpan().SequenceEqual(other._questions)
+			&& _answers.AsSpan().SequenceEqual(other._answers)
+			&& _authorities.AsSpan().SequenceEqual(other._authorities)
+			&& _additionals.AsSpan().SequenceEqual(other._additionals);
 	}
 
 	/// <summary>
@@ -372,7 +371,7 @@ public sealed record DnsMessage
 		AppendFlag(builder, IsRecursionAvailable, "ra");
 		AppendFlag(builder, IsAuthenticData, "ad");
 		AppendFlag(builder, IsCheckingDisabled, "cd");
-		builder.Append($"; QUERY: {Questions.Count}, ANSWER: {Answers.Count}, AUTHORITY: {Authorities.Count}, ADDITIONAL: {Additionals.Count + (Edns is null ? 0 : 1)}");
+		builder.Append($"; QUERY: {_questions.Length}, ANSWER: {_answers.Length}, AUTHORITY: {_authorities.Length}, ADDITIONAL: {_additionals.Length + (Edns is null ? 0 : 1)}");
 
 		if (Edns is not null)
 		{
@@ -382,19 +381,20 @@ public sealed record DnsMessage
 
 		bool isUpdate = Opcode is DnsOpcode.Update;
 
-		if (Questions.Count is not 0)
+		if (_questions.Length is not 0)
 		{
 			builder.AppendLine().AppendLine().Append(isUpdate ? ";; ZONE SECTION:" : ";; QUESTION SECTION:");
 
-			for (int i = 0; i < Questions.Count; ++i)
+			foreach (DnsQuestion question in _questions)
 			{
-				builder.AppendLine().Append($";{Questions[i]}");
+				builder.AppendLine().Append(';');
+				question.AppendTo(builder);
 			}
 		}
 
-		AppendSection(builder, isUpdate ? ";; PREREQUISITE SECTION:" : ";; ANSWER SECTION:", Answers);
-		AppendSection(builder, isUpdate ? ";; UPDATE SECTION:" : ";; AUTHORITY SECTION:", Authorities);
-		AppendSection(builder, ";; ADDITIONAL SECTION:", Additionals);
+		AppendSection(builder, isUpdate ? ";; PREREQUISITE SECTION:" : ";; ANSWER SECTION:", _answers);
+		AppendSection(builder, isUpdate ? ";; UPDATE SECTION:" : ";; AUTHORITY SECTION:", _authorities);
+		AppendSection(builder, ";; ADDITIONAL SECTION:", _additionals);
 		return builder.ToString();
 	}
 
@@ -406,18 +406,19 @@ public sealed record DnsMessage
 		}
 	}
 
-	private static void AppendSection(StringBuilder builder, string title, IReadOnlyList<DnsResourceRecord> records)
+	private static void AppendSection(StringBuilder builder, string title, DnsResourceRecord[] records)
 	{
-		if (records.Count is 0)
+		if (records.Length is 0)
 		{
 			return;
 		}
 
 		builder.AppendLine().AppendLine().Append(title);
 
-		for (int i = 0; i < records.Count; ++i)
+		foreach (DnsResourceRecord record in records)
 		{
-			builder.AppendLine().Append(records[i]);
+			builder.AppendLine();
+			record.AppendTo(builder);
 		}
 	}
 }

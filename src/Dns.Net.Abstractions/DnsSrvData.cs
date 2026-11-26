@@ -27,6 +27,7 @@ public sealed record DnsSrvData(ushort Priority, ushort Weight, ushort Port, Dns
 		writer.WriteUInt16(Priority);
 		writer.WriteUInt16(Weight);
 		writer.WriteUInt16(Port);
+		// RFC 2782: the target is never compressed.
 		writer.WriteName(Target, compress: false);
 	}
 

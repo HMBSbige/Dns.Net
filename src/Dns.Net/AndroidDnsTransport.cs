@@ -5,8 +5,11 @@ using System.Runtime.Versioning;
 namespace Dns.Net;
 
 /// <summary>
-/// Sends queries through the DNS resolver of Android, as <c>android.net.DnsResolver.rawQuery</c> does: with the servers, Private DNS and cache of the network, and over TCP when UDP truncates the response.
+/// Sends queries through the DNS resolver of Android, as <c>android.net.DnsResolver.rawQuery</c> does: with the servers, Private DNS and cache of the network, and over TCP when UDP truncates the response, for answers of up to 8 KiB in current versions of Android.
 /// </summary>
+/// <remarks>
+/// Over UDP, the resolver moves on to the next server on SERVFAIL, NOTIMP or REFUSED, and reports such an answer from every server as a timeout, so the call throws <see cref="IOException" /> instead of returning the response.
+/// </remarks>
 [SupportedOSPlatform("android29.0")]
 public sealed class AndroidDnsTransport : IDnsTransport
 {
@@ -39,32 +42,32 @@ public sealed class AndroidDnsTransport : IDnsTransport
 	public long NetworkHandle { get; }
 
 	/// <inheritdoc />
-	/// <exception cref="IOException">The resolver failed, or the query is longer than it accepts.</exception>
-	/// <exception cref="InvalidDataException">The resolver returned a message that is malformed or does not answer the query.</exception>
+	/// <exception cref="IOException">The resolver failed, such as when every server answered SERVFAIL, NOTIMP or REFUSED over UDP, or the query is longer than it accepts.</exception>
+	/// <exception cref="InvalidDataException">The resolver returned a message that is malformed, such as an answer longer than it keeps, which it cuts short; or one that is truncated or does not answer the query.</exception>
 	/// <exception cref="OperationCanceledException"><paramref name="cancellationToken" /> was canceled.</exception>
 	public ValueTask<DnsMessage> SendAsync(DnsMessage query, CancellationToken cancellationToken = default)
 	{
 		ArgumentNullException.ThrowIfNull(query);
-
-		byte[] message = query.Encode();
-
-		return cancellationToken.IsCancellationRequested ? ValueTask.FromCanceled<DnsMessage>(cancellationToken) : SendCoreAsync(query, message, cancellationToken);
+		return cancellationToken.IsCancellationRequested ? ValueTask.FromCanceled<DnsMessage>(cancellationToken) : SendCoreAsync(query, cancellationToken);
 	}
 
-	private async ValueTask<DnsMessage> SendCoreAsync(DnsMessage query, byte[] message, CancellationToken cancellationToken)
+	private async ValueTask<DnsMessage> SendCoreAsync(DnsMessage query, CancellationToken cancellationToken)
 	{
-		byte[] answer = ArrayPool<byte>.Shared.Rent(AndroidResolver.MaxAnswerLength);
+		byte[] buffer = ArrayPool<byte>.Shared.Rent(DnsMessage.MaxEncodedLength);
 
 		try
 		{
-			int length = await AndroidResolver.SendAsync(NetworkHandle, message, answer, cancellationToken).ConfigureAwait(false);
-			DnsMessage response = DnsMessage.Decode(answer.AsSpan(0, length));
+			_ = query.TryEncode(buffer, out int length);
 
-			return response.IsResponseTo(query) ? response : throw new InvalidDataException("The DNS resolver of Android returned a message that does not answer the query.");
+			// android_res_nsend has sent the query by the time it returns, so the same buffer then receives the answer.
+			length = await AndroidResolver.SendAsync(NetworkHandle, buffer.AsSpan(0, length), buffer, cancellationToken).ConfigureAwait(false);
+			DnsMessage response = DnsMessage.Decode(buffer.AsSpan(0, length));
+
+			return response.IsResponseTo(query) && !response.IsTruncated ? response : throw new InvalidDataException("The DNS resolver of Android returned a truncated message or one that does not answer the query.");
 		}
 		finally
 		{
-			ArrayPool<byte>.Shared.Return(answer);
+			ArrayPool<byte>.Shared.Return(buffer);
 		}
 	}
 }

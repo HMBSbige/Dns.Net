@@ -13,11 +13,13 @@ namespace Dns.Net;
 /// <remarks>
 /// <para>
 /// Results and exceptions of the resolver come through as they are, and can differ between platforms; a timeout, for example, may come back as SERVFAIL.
-/// No name is treated apart, onion included.
+/// Only <see cref="DnsQueryResult{T}.NegativeCacheTtl" /> is changed: it is zero for anything but NXDOMAIN and NODATA (RFC 2308, Sec. 5).
+/// A name that the resolver rejects, such as one with a label longer than 63 bytes, is not checked at the call: depending on the platform, it fails the task or comes back with an error response code.
+/// The client treats no name apart, onion included, but the resolver of the system may: that of Windows answers from the hosts file.
 /// Names in results are labels joined by dots, without escapes, so <c>a\.b.example</c> comes back as <c>a.b.example</c>.
 /// </para>
 /// <para>
-/// On Android, where .NET cannot find the servers of the system, a client created without options resolves through a <see cref="DnsClient" /> over an <see cref="AndroidDnsTransport" />, and results follow the rules of <see cref="DnsClient" />.
+/// On Android, where .NET cannot find the servers of the system, a client created without options resolves through a <see cref="DnsClient" /> over an <see cref="AndroidDnsTransport" />, and results follow the rules of <see cref="DnsClient" />, except that SERVFAIL, NOTIMP and REFUSED over UDP throw <see cref="IOException" />, as <see cref="AndroidDnsTransport" /> describes.
 /// </para>
 /// </remarks>
 [UnsupportedOSPlatform("browser")]
@@ -65,7 +67,7 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 	/// <exception cref="ObjectDisposedException">The client is disposed.</exception>
 	public ValueTask<DnsQueryResult<DnsAddressRecord>> ResolveAddressesAsync(string name, AddressFamily addressFamily, CancellationToken cancellationToken = default)
 	{
-		QueryArguments.CheckName(name);
+		ArgumentException.ThrowIfNullOrEmpty(name);
 		QueryArguments.CheckAddressFamily(addressFamily);
 		CheckNullCharacter(name);
 		ObjectDisposedException.ThrowIf(_disposed, this);
@@ -87,16 +89,19 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 	/// <exception cref="NotSupportedException"><typeparamref name="TRecord" /> is none of the record types of the resolver of .NET.</exception>
 	public ValueTask<DnsQueryResult<TRecord>> ResolveAsync<TRecord>(string name, CancellationToken cancellationToken = default) where TRecord : IDnsQueryRecord<TRecord>
 	{
-		QueryArguments.CheckName(name);
+		ArgumentException.ThrowIfNullOrEmpty(name);
 		CheckNullCharacter(name);
 		ObjectDisposedException.ThrowIf(_disposed, this);
 
+		// Also on Android, so that what resolves does not depend on the platform.
+		if (!IsResolverType<TRecord>())
+		{
+			throw new NotSupportedException($"The resolver of .NET does not resolve records of the type {typeof(TRecord)}.");
+		}
+
 		if (_android is not null)
 		{
-			// The types of the resolver of .NET, so that what resolves does not depend on the platform.
-			return IsResolverType<TRecord>()
-				? _android.ResolveAsync<TRecord>(name, cancellationToken)
-				: throw new NotSupportedException($"The resolver of .NET does not resolve records of the type {typeof(TRecord)}.");
+			return _android.ResolveAsync<TRecord>(name, cancellationToken);
 		}
 
 		// For a value type, each comparison is a constant in the code compiled for TRecord.
@@ -130,7 +135,7 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 			return MapAsync<NsRecord, DnsNsRecord, TRecord>(_resolver?.ResolveNsAsync(name, cancellationToken) ?? System.Net.Dns.ResolveNsAsync(name, cancellationToken), ToQueryResult);
 		}
 
-		throw new NotSupportedException($"The resolver of .NET does not resolve records of the type {typeof(TRecord)}.");
+		throw new UnreachableException();
 	}
 
 	/// <summary>
@@ -166,7 +171,7 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 	// The resolver of Windows would end the name at a null character and query only the part before it.
 	private static void CheckNullCharacter(string name)
 	{
-		if (name.Contains('\0', StringComparison.Ordinal))
+		if (name.Contains('\0'))
 		{
 			throw new ArgumentException("The name has a null character.", nameof(name));
 		}
@@ -190,7 +195,7 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 
 	internal static DnsQueryResult<DnsTxtRecord> ToQueryResult(DnsResult<TxtRecord> result)
 	{
-		return Map(result, static record => new DnsTxtRecord([.. record.Values], record.Ttl));
+		return Map(result, static record => new DnsTxtRecord(record.Values, record.Ttl));
 	}
 
 	internal static DnsQueryResult<DnsCNameRecord> ToQueryResult(DnsResult<CNameRecord> result)
@@ -232,7 +237,7 @@ public sealed class SystemDnsClient : IDnsClient, IDisposable, IAsyncDisposable
 			records[i] = map(source[i]);
 		}
 
-		return new DnsQueryResult<TResult>(result.ResponseCode, records, result.NegativeCacheTtl);
+		return new DnsQueryResult<TResult>(result.ResponseCode, records, NegativeCaching.Limit(result.ResponseCode, records.Length, result.NegativeCacheTtl));
 	}
 
 	// Maps each list once, by reference, so that SRV records that share a list of the resolver, as those with the same target do, share one array.

@@ -45,30 +45,16 @@ public class DnsStreamExtensionsTest
 	}
 
 	[Test]
-	public async Task WrittenMessagesReadBack(CancellationToken cancellationToken)
+	[MatrixDataSource]
+	public async Task AReadThatEndsInsideAFrameThrows([Matrix(1, 2, 4)] int length, [Matrix] bool frame)
 	{
-		using MemoryStream stream = new();
+		// The stream ends inside the length, right after it, or inside the message.
+		byte[] data = [0, 5, 1, 2, 3];
+		TrickleStream stream = new(data[..length]);
 
-		await stream.WriteDnsMessageAsync(Query, cancellationToken);
-		await stream.WriteDnsMessageAsync(Response, cancellationToken);
-		stream.Position = 0;
+		Task read = frame ? stream.ReadDnsFrameAsync().AsTask() : stream.ReadDnsMessageAsync().AsTask();
 
-		await Assert.That(await stream.ReadDnsMessageAsync(cancellationToken)).IsEqualTo(Query);
-		await Assert.That(await stream.ReadDnsMessageAsync(cancellationToken)).IsEqualTo(Response);
-		await Assert.That(await stream.ReadDnsMessageAsync(cancellationToken)).IsNull();
-	}
-
-	[Test]
-	public async Task EndOfStreamInsideAMessageThrows()
-	{
-		byte[] query = Query.Encode();
-
-		// The stream ends inside the length, inside the message, and right after the length.
-		foreach (byte[] data in (byte[][])[[0], [0, (byte)query.Length, .. query.AsSpan(0, 10)], [0, (byte)query.Length]])
-		{
-			TrickleStream stream = new(data);
-			await Assert.That(async () => await stream.ReadDnsMessageAsync()).Throws<EndOfStreamException>();
-		}
+		await Assert.That(async () => await read).Throws<EndOfStreamException>();
 	}
 
 	[Test]
@@ -86,6 +72,8 @@ public class DnsStreamExtensionsTest
 		// The methods check their arguments before they return a task.
 		await Assert.That(() => { _ = missing!.WriteDnsMessageAsync(Query); }).Throws<ArgumentNullException>().WithParameterName("stream");
 		await Assert.That(() => { _ = missing!.ReadDnsMessageAsync(); }).Throws<ArgumentNullException>().WithParameterName("stream");
+		await Assert.That(() => { _ = missing!.WriteDnsFrameAsync(new byte[1]); }).Throws<ArgumentNullException>().WithParameterName("stream");
+		await Assert.That(() => { _ = missing!.ReadDnsFrameAsync(); }).Throws<ArgumentNullException>().WithParameterName("stream");
 		await Assert.That(() => { _ = new RecordingStream().WriteDnsMessageAsync(null!); }).Throws<ArgumentNullException>().WithParameterName("message");
 	}
 
@@ -99,14 +87,16 @@ public class DnsStreamExtensionsTest
 	}
 
 	[Test]
-	public async Task AReadThatWaitsForTheLengthHoldsNoBufferForAWholeMessage(CancellationToken cancellationToken)
+	[MatrixDataSource]
+	public async Task AReadThatWaitsForTheLengthHoldsNoBufferForAWholeMessage([Matrix] bool frame, CancellationToken cancellationToken)
 	{
 		EmptyStream stream = new();
 
-		await Assert.That(await stream.ReadDnsMessageAsync(cancellationToken)).IsNull();
+		object? end = frame ? await stream.ReadDnsFrameAsync(cancellationToken) : await stream.ReadDnsMessageAsync(cancellationToken);
 
-		await Assert.That(stream.ArrayLengths.Count).IsEqualTo(1);
-		await Assert.That(stream.ArrayLengths[0]).IsBetween(2, 1023);
+		await Assert.That(end).IsNull();
+		int arrayLength = await Assert.That(stream.ArrayLengths).HasSingleItem();
+		await Assert.That(arrayLength).IsBetween(2, 1023);
 	}
 
 	[Test]
@@ -117,17 +107,18 @@ public class DnsStreamExtensionsTest
 		ValueTask write = stream.WriteDnsMessageAsync(Query, CancellationToken.None);
 
 		await Assert.That(write.IsCompleted).IsFalse();
-		await Assert.That(stream.ArrayLengths.Count).IsEqualTo(1);
-		await Assert.That(stream.ArrayLengths[0]).IsBetween(2 + Query.Encode().Length, 1023);
+		int arrayLength = await Assert.That(stream.ArrayLengths).HasSingleItem();
+		await Assert.That(arrayLength).IsBetween(2 + Query.Encode().Length, 1023);
 	}
 
 	[Test]
-	public async Task FramesComeAsReceivedSoThatAMalformedRequestCanBeAnsweredAndTheNextOneRead(CancellationToken cancellationToken)
+	public async Task FramesComeAsReceivedSoThatAMalformedRequestCanBeAnsweredAndASignatureChecked(CancellationToken cancellationToken)
 	{
 		// Decoding rejects the 3-byte A record.
 		byte[] malformed = Concat(Header(0x4242, 0x0100, 1, 0, 0, 1), Name("example", "com"), U16(1), U16(1), Record([0], 1, [192, 0, 2]));
-		byte[] query = Query.Encode();
-		TrickleStream stream = new([.. U16(malformed.Length), .. malformed, .. U16(query.Length), .. query]);
+		// The encoder would compress this owner; a signature covers the bytes as sent (RFC 8945, Sec. 4.3.2).
+		byte[] uncompressed = Concat(Header(0x0101, 0x0100, 1, 0, 0, 1), Name("example", "com"), U16(1), U16(1), Record(Name("example", "com"), 1, [192, 0, 2, 1]));
+		TrickleStream stream = new([.. U16(malformed.Length), .. malformed, .. U16(uncompressed.Length), .. uncompressed]);
 
 		byte[]? first = await stream.ReadDnsFrameAsync(cancellationToken);
 		byte[]? second = await stream.ReadDnsFrameAsync(cancellationToken);
@@ -138,49 +129,18 @@ public class DnsStreamExtensionsTest
 		await Assert.That(DnsMessage.TryDecode(first, out _)).IsFalse();
 		await Assert.That(DnsMessage.CreateErrorResponse(first)?.Id).IsEqualTo((ushort)0x4242);
 		await Assert.That(second).IsNotNull();
-		await Assert.That(Convert.ToHexString(second!)).IsEqualTo(Convert.ToHexString(query));
+		await Assert.That(Convert.ToHexString(second!)).IsEqualTo(Convert.ToHexString(uncompressed));
+		await Assert.That(Convert.ToHexString(DnsMessage.Decode(second).Encode())).IsNotEqualTo(Convert.ToHexString(uncompressed));
 		await Assert.That(end).IsNull();
 	}
 
 	[Test]
-	public async Task AFrameKeepsTheBytesThatEncodingAgainWouldChange(CancellationToken cancellationToken)
-	{
-		// The encoder would compress this owner; a signature covers the bytes as sent (RFC 8945, Sec. 4.3.2).
-		byte[] request = Concat(Header(0x0101, 0x0100, 1, 0, 0, 1), Name("example", "com"), U16(1), U16(1), Record(Name("example", "com"), 1, [192, 0, 2, 1]));
-		using MemoryStream stream = new([.. U16(request.Length), .. request]);
-
-		byte[]? frame = await stream.ReadDnsFrameAsync(cancellationToken);
-
-		await Assert.That(frame).IsNotNull();
-		await Assert.That(Convert.ToHexString(frame!)).IsEqualTo(Convert.ToHexString(request));
-		await Assert.That(Convert.ToHexString(DnsMessage.Decode(frame).Encode())).IsNotEqualTo(Convert.ToHexString(request));
-	}
-
-	[Test]
-	public async Task AFrameReadEndsWithNullAtACleanEndAndThrowsInsideAFrame(CancellationToken cancellationToken)
+	public async Task AFrameReadEndsWithNullAtACleanEnd(CancellationToken cancellationToken)
 	{
 		await Assert.That(await new TrickleStream([]).ReadDnsFrameAsync(cancellationToken)).IsNull();
 
 		// An empty frame is a frame, not the end of the stream.
 		await Assert.That(await new TrickleStream([0, 0]).ReadDnsFrameAsync(cancellationToken)).IsEquivalentTo(Array.Empty<byte>());
-
-		// The stream ends inside the length, inside the frame, and right after the length.
-		foreach (byte[] data in (byte[][])[[0], [0, 5, 1, 2, 3], [0, 5]])
-		{
-			TrickleStream stream = new(data);
-			await Assert.That(async () => await stream.ReadDnsFrameAsync(cancellationToken)).Throws<EndOfStreamException>();
-		}
-	}
-
-	[Test]
-	public async Task AFrameReadThatWaitsForTheLengthHoldsNoBufferForAWholeFrame(CancellationToken cancellationToken)
-	{
-		EmptyStream stream = new();
-
-		await Assert.That(await stream.ReadDnsFrameAsync(cancellationToken)).IsNull();
-
-		await Assert.That(stream.ArrayLengths.Count).IsEqualTo(1);
-		await Assert.That(stream.ArrayLengths[0]).IsBetween(2, 1023);
 	}
 
 	[Test]
@@ -205,15 +165,6 @@ public class DnsStreamExtensionsTest
 
 		await Assert.That(() => { _ = stream.WriteDnsFrameAsync(new byte[ushort.MaxValue + 1]); }).ThrowsExactly<ArgumentOutOfRangeException>().WithParameterName("message");
 		await Assert.That(stream.Writes).IsEmpty();
-	}
-
-	[Test]
-	public async Task FrameArgumentsMustNotBeNull()
-	{
-		Stream? missing = null;
-
-		await Assert.That(() => { _ = missing!.WriteDnsFrameAsync(new byte[1]); }).Throws<ArgumentNullException>().WithParameterName("stream");
-		await Assert.That(() => { _ = missing!.ReadDnsFrameAsync(); }).Throws<ArgumentNullException>().WithParameterName("stream");
 	}
 
 	[Test]
@@ -245,22 +196,10 @@ public class DnsStreamExtensionsTest
 
 	[Test]
 	[MatrixDataSource]
-	public async Task AReadThatWaitsForTheLengthEndsWhenItsTokenIsCanceled([Matrix] bool frame)
+	public async Task AReadThatWaitsEndsWhenItsTokenIsCanceled([Matrix] bool frame, [Matrix] bool afterLength)
 	{
 		using CancellationTokenSource source = new();
-		PendingReadStream stream = new([]);
-
-		Task read = frame ? stream.ReadDnsFrameAsync(source.Token).AsTask() : stream.ReadDnsMessageAsync(source.Token).AsTask();
-
-		await AssertCanceledBy(read, stream.Token, source);
-	}
-
-	[Test]
-	[MatrixDataSource]
-	public async Task AReadThatWaitsForTheMessageAfterItsLengthEndsWhenItsTokenIsCanceled([Matrix] bool frame)
-	{
-		using CancellationTokenSource source = new();
-		PendingReadStream stream = new(U16(Query.Encode().Length));
+		PendingReadStream stream = new(afterLength ? U16(Query.Encode().Length) : []);
 
 		Task read = frame ? stream.ReadDnsFrameAsync(source.Token).AsTask() : stream.ReadDnsMessageAsync(source.Token).AsTask();
 
@@ -280,12 +219,10 @@ public class DnsStreamExtensionsTest
 		await Assert.That(exception?.CancellationToken).IsEqualTo(source.Token);
 	}
 
-	// Ends at once; records the array length behind each read buffer, or -1.
-	private sealed class EmptyStream : Stream
+	// Supports nothing that a derived stream does not override.
+	private abstract class TestStream : Stream
 	{
-		public List<int> ArrayLengths { get; } = [];
-
-		public override bool CanRead => true;
+		public override bool CanRead => false;
 
 		public override bool CanSeek => false;
 
@@ -304,14 +241,9 @@ public class DnsStreamExtensionsTest
 			throw new NotSupportedException();
 		}
 
-		public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+		public override void Write(byte[] buffer, int offset, int count)
 		{
-			ArrayLengths.Add(MemoryMarshal.TryGetArray(buffer, out ArraySegment<byte> segment) && segment.Array is { } array ? array.Length : -1);
-			return ValueTask.FromResult(0);
-		}
-
-		public override void Flush()
-		{
+			throw new NotSupportedException();
 		}
 
 		public override long Seek(long offset, SeekOrigin origin)
@@ -324,32 +256,33 @@ public class DnsStreamExtensionsTest
 			throw new NotSupportedException();
 		}
 
-		public override void Write(byte[] buffer, int offset, int count)
+		public override void Flush()
 		{
-			throw new NotSupportedException();
+		}
+	}
+
+	// Ends at once; records the array length behind each read buffer, or -1.
+	private sealed class EmptyStream : TestStream
+	{
+		public List<int> ArrayLengths { get; } = [];
+
+		public override bool CanRead => true;
+
+		public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+		{
+			ArrayLengths.Add(MemoryMarshal.TryGetArray(buffer, out ArraySegment<byte> segment) && segment.Array is { } array ? array.Length : -1);
+			return ValueTask.FromResult(0);
 		}
 	}
 
 	// Completes no write until canceled; records the array length behind each write buffer, or -1, and the last token.
-	private sealed class PendingWriteStream : Stream
+	private sealed class PendingWriteStream : TestStream
 	{
 		public List<int> ArrayLengths { get; } = [];
 
 		public CancellationToken Token { get; private set; }
 
-		public override bool CanRead => false;
-
-		public override bool CanSeek => false;
-
 		public override bool CanWrite => true;
-
-		public override long Length => throw new NotSupportedException();
-
-		public override long Position
-		{
-			get => throw new NotSupportedException();
-			set => throw new NotSupportedException();
-		}
 
 		public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
 		{
@@ -357,52 +290,16 @@ public class DnsStreamExtensionsTest
 			Token = cancellationToken;
 			return new ValueTask(Task.Delay(Timeout.Infinite, cancellationToken));
 		}
-
-		public override void Write(byte[] buffer, int offset, int count)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override void Flush()
-		{
-		}
-
-		public override int Read(byte[] buffer, int offset, int count)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override long Seek(long offset, SeekOrigin origin)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override void SetLength(long value)
-		{
-			throw new NotSupportedException();
-		}
 	}
 
 	// Returns data, then completes no read until canceled; records the last token.
-	private sealed class PendingReadStream(byte[] data) : Stream
+	private sealed class PendingReadStream(byte[] data) : TestStream
 	{
 		private int _position;
 
 		public CancellationToken Token { get; private set; }
 
 		public override bool CanRead => true;
-
-		public override bool CanSeek => false;
-
-		public override bool CanWrite => false;
-
-		public override long Length => throw new NotSupportedException();
-
-		public override long Position
-		{
-			get => throw new NotSupportedException();
-			set => throw new NotSupportedException();
-		}
 
 		public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
 		{
@@ -424,50 +321,14 @@ public class DnsStreamExtensionsTest
 				return 0;
 			}
 		}
-
-		public override int Read(byte[] buffer, int offset, int count)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override void Flush()
-		{
-		}
-
-		public override long Seek(long offset, SeekOrigin origin)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override void SetLength(long value)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override void Write(byte[] buffer, int offset, int count)
-		{
-			throw new NotSupportedException();
-		}
 	}
 
 	// Records every write as a separate array, whichever overload makes it.
-	private sealed class RecordingStream : Stream
+	private sealed class RecordingStream : TestStream
 	{
 		public List<byte[]> Writes { get; } = [];
 
-		public override bool CanRead => false;
-
-		public override bool CanSeek => false;
-
 		public override bool CanWrite => true;
-
-		public override long Length => throw new NotSupportedException();
-
-		public override long Position
-		{
-			get => throw new NotSupportedException();
-			set => throw new NotSupportedException();
-		}
 
 		public override void Write(byte[] buffer, int offset, int count)
 		{
@@ -495,37 +356,14 @@ public class DnsStreamExtensionsTest
 			Writes.Add(buffer.ToArray());
 			return ValueTask.CompletedTask;
 		}
-
-		public override void Flush()
-		{
-		}
-
-		public override int Read(byte[] buffer, int offset, int count)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override long Seek(long offset, SeekOrigin origin)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override void SetLength(long value)
-		{
-			throw new NotSupportedException();
-		}
 	}
 
 	// Returns at most one byte from each read.
-	private sealed class TrickleStream(byte[] data) : Stream
+	private sealed class TrickleStream(byte[] data) : TestStream
 	{
 		private int _position;
 
 		public override bool CanRead => true;
-
-		public override bool CanSeek => false;
-
-		public override bool CanWrite => false;
 
 		public override long Length => data.Length;
 
@@ -559,25 +397,6 @@ public class DnsStreamExtensionsTest
 		public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
 		{
 			return ValueTask.FromResult(Read(buffer.Span));
-		}
-
-		public override void Flush()
-		{
-		}
-
-		public override long Seek(long offset, SeekOrigin origin)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override void SetLength(long value)
-		{
-			throw new NotSupportedException();
-		}
-
-		public override void Write(byte[] buffer, int offset, int count)
-		{
-			throw new NotSupportedException();
 		}
 	}
 }

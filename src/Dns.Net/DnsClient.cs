@@ -14,7 +14,8 @@ namespace Dns.Net;
 /// <para>The client neither owns nor disposes the transport, and allows concurrent calls whenever the transport does.</para>
 /// <para>
 /// A name is absolute: no search domain is appended. A name that is not ASCII is converted with <see cref="IdnMapping" /> under the STD3 rules, so a label with an underscore is valid only in an ASCII name.
-/// Names in results keep the escapes of <see cref="DnsName.ToString" />, except that a name with an <c>xn--</c> label is converted to Unicode.
+/// Names in results keep the escapes of <see cref="DnsName.ToString" />, except that a name with an <c>xn--</c> label comes back in Unicode when <see cref="IdnMapping" /> converts the whole name, which it does not for a name with an escape or an underscore label.
+/// A name that is not valid throws <see cref="ArgumentException" /> before the value task is returned.
 /// </para>
 /// <para>
 /// The client is a stub resolver: it expects a recursive resolver behind the transport and follows no referral.
@@ -49,13 +50,13 @@ public sealed class DnsClient(IDnsTransport transport) : IDnsClient
 	/// <exception cref="InvalidDataException">The response does not answer the query, or is truncated.</exception>
 	public ValueTask<DnsQueryResult<DnsAddressRecord>> ResolveAddressesAsync(string name, AddressFamily addressFamily, CancellationToken cancellationToken = default)
 	{
-		QueryArguments.CheckName(name);
+		ArgumentException.ThrowIfNullOrEmpty(name);
 		QueryArguments.CheckAddressFamily(addressFamily);
 		DnsName dnsName = ParseName(name);
 
 		if (SkipsQuery(dnsName))
 		{
-			return OnionNames.NxDomain<DnsAddressRecord>(cancellationToken);
+			return OnionNxDomain<DnsAddressRecord>(cancellationToken);
 		}
 
 		return addressFamily switch
@@ -76,7 +77,7 @@ public sealed class DnsClient(IDnsTransport transport) : IDnsClient
 	/// <exception cref="InvalidOperationException"><see cref="IDnsQueryRecord{TSelf}.CreateRecords" /> of <typeparamref name="TRecord" /> returned <see langword="null" />.</exception>
 	public ValueTask<DnsQueryResult<TRecord>> ResolveAsync<TRecord>(string name, CancellationToken cancellationToken = default) where TRecord : IDnsQueryRecord<TRecord>
 	{
-		QueryArguments.CheckName(name);
+		ArgumentException.ThrowIfNullOrEmpty(name);
 		DnsName dnsName = ParseName(name);
 		DnsRecordType type = TRecord.Type;
 
@@ -85,12 +86,20 @@ public sealed class DnsClient(IDnsTransport transport) : IDnsClient
 			throw new NotSupportedException($"The record type {type} of {typeof(TRecord)} is a QTYPE or meta-type.");
 		}
 
-		return SkipsQuery(dnsName) ? OnionNames.NxDomain<TRecord>(cancellationToken) : ResolveCoreAsync(dnsName, type, TRecord.CreateRecords, cancellationToken);
+		return SkipsQuery(dnsName) ? OnionNxDomain<TRecord>(cancellationToken) : ResolveCoreAsync(dnsName, type, TRecord.CreateRecords, cancellationToken);
 	}
 
 	private bool SkipsQuery(DnsName name)
 	{
 		return !QueriesOnionNames && SpecialUseNames.IsOnion(name);
+	}
+
+	// RFC 7686, Sec. 2. A canceled token cancels this answer too, so that the name makes no difference to the caller.
+	private static ValueTask<DnsQueryResult<T>> OnionNxDomain<T>(CancellationToken cancellationToken)
+	{
+		return cancellationToken.IsCancellationRequested
+			? ValueTask.FromCanceled<DnsQueryResult<T>>(cancellationToken)
+			: ValueTask.FromResult(new DnsQueryResult<T>(DnsResponseCode.NxDomain, [], TimeSpan.Zero));
 	}
 
 	private static DnsName ParseName(string name)
@@ -110,7 +119,40 @@ public sealed class DnsClient(IDnsTransport transport) : IDnsClient
 
 		await Task.WhenAll(a, aaaa).ConfigureAwait(false);
 
-		return AddressResults.Merge(await a.ConfigureAwait(false), await aaaa.ConfigureAwait(false));
+		return MergeAddressResults(await a.ConfigureAwait(false), await aaaa.ConfigureAwait(false));
+	}
+
+	// Both results come from ResolveCoreAsync, so a failure already carries no negative-cache TTL, and each list is a new array that no one else holds.
+	private static DnsQueryResult<DnsAddressRecord> MergeAddressResults(DnsQueryResult<DnsAddressRecord> a, DnsQueryResult<DnsAddressRecord> aaaa)
+	{
+		IReadOnlyList<DnsAddressRecord> records = (a.Records.Count, aaaa.Records.Count) switch
+		{
+			(_, 0) => a.Records,
+			(0, _) => aaaa.Records,
+			_ => (DnsAddressRecord[])[.. (DnsAddressRecord[])a.Records, .. (DnsAddressRecord[])aaaa.Records]
+		};
+
+		if (records.Count is not 0)
+		{
+			return new DnsQueryResult<DnsAddressRecord>(DnsResponseCode.NoError, records, TimeSpan.Zero);
+		}
+
+		DnsResponseCode responseCode = a.ResponseCode is DnsResponseCode.NxDomain || aaaa.ResponseCode is DnsResponseCode.NxDomain
+			? DnsResponseCode.NxDomain
+			: a.ResponseCode is not DnsResponseCode.NoError ? a.ResponseCode : aaaa.ResponseCode;
+
+		// A failure of one query takes no negative-cache TTL from a negative answer to the other.
+		return new DnsQueryResult<DnsAddressRecord>(responseCode, [], NegativeCaching.Limit(responseCode, recordCount: 0, MinNonZero(a.NegativeCacheTtl, aaaa.NegativeCacheTtl)));
+
+		static TimeSpan MinNonZero(TimeSpan x, TimeSpan y)
+		{
+			if (x == TimeSpan.Zero)
+			{
+				return y;
+			}
+
+			return y == TimeSpan.Zero || x < y ? x : y;
+		}
 	}
 
 	private async ValueTask<DnsQueryResult<T>> ResolveCoreAsync<T>(DnsName name, DnsRecordType type, RecordFactory<T> createRecords, CancellationToken cancellationToken)
@@ -130,22 +172,15 @@ public sealed class DnsClient(IDnsTransport transport) : IDnsClient
 
 		if (response.ResponseCode is not DnsResponseCode.NoError)
 		{
-			return CreateEmptyResult<T>(response.ResponseCode, response);
+			return CreateEmptyResult<T>(response);
 		}
 
-		T[]? records = FollowCNameChain(response, name, type, createRecords);
-
-		if (records is null)
+		return FollowCNameChain(response, name, type, createRecords) switch
 		{
-			return new DnsQueryResult<T>(DnsResponseCode.ServerFailure, [], TimeSpan.Zero);
-		}
-
-		if (records.Length is 0)
-		{
-			return CreateEmptyResult<T>(DnsResponseCode.NoError, response);
-		}
-
-		return new DnsQueryResult<T>(DnsResponseCode.NoError, records, TimeSpan.Zero);
+			null => new DnsQueryResult<T>(DnsResponseCode.ServerFailure, [], TimeSpan.Zero),
+			[] => CreateEmptyResult<T>(response),
+			T[] records => new DnsQueryResult<T>(DnsResponseCode.NoError, records, TimeSpan.Zero)
+		};
 	}
 
 	// Returns empty for NODATA, or null for a loop or a chain that is too long.
@@ -209,7 +244,7 @@ public sealed class DnsClient(IDnsTransport transport) : IDnsClient
 	}
 
 	// RFC 2308, Sec. 5.
-	private static DnsQueryResult<T> CreateEmptyResult<T>(DnsResponseCode responseCode, DnsMessage response)
+	private static DnsQueryResult<T> CreateEmptyResult<T>(DnsMessage response)
 	{
 		TimeSpan ttl = TimeSpan.Zero;
 
@@ -222,11 +257,11 @@ public sealed class DnsClient(IDnsTransport transport) : IDnsClient
 			}
 		}
 
-		return new DnsQueryResult<T>(responseCode, [], NegativeCaching.Limit(responseCode, recordCount: 0, ttl));
+		return new DnsQueryResult<T>(response.ResponseCode, [], NegativeCaching.Limit(response.ResponseCode, recordCount: 0, ttl));
 	}
 
 	private static DnsAddressRecord[] CreateAddressRecords(ReadOnlySpan<DnsResourceRecord> answers, TimeSpan ttl, DnsMessage response)
 	{
-		return QueryRecords.Create<DnsAddressRecord>(answers, ttl, static (data, recordTtl) => data is DnsAddressData { Address: var address } ? new DnsAddressRecord(IPAddressCopy.Of(address), recordTtl) : null);
+		return QueryRecords.Create(answers, ttl, static (DnsAddressData data, TimeSpan recordTtl) => new DnsAddressRecord(IPAddressCopy.Of(data.Address), recordTtl));
 	}
 }

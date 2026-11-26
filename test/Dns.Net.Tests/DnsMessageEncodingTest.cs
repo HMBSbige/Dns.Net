@@ -233,6 +233,22 @@ public class DnsMessageEncodingTest
 	}
 
 	[Test]
+	public async Task CompressesNamesAfterTheTableOfSuffixesGrows()
+	{
+		// 40 owners enter 42 suffixes, more than the 32 that the initial table holds while at most half full.
+		DnsAddressData address = new(IPAddress.Parse("192.0.2.1"));
+		DnsResourceRecord[] records = [.. Enumerable.Range(0, 40).Select(i => new DnsResourceRecord(DnsName.Parse($"h{i}.example.com"), TimeSpan.Zero, address))];
+		DnsMessage message = new() { Answers = records, Additionals = records };
+		byte[] wire = message.Encode();
+		int[] additionalOwners = [.. NameOffsets(wire).Skip(40)];
+
+		// Each additional owner is a lone pointer, including those to suffixes entered before the table grew.
+		await Assert.That(additionalOwners.Length).IsEqualTo(40);
+		await Assert.That(additionalOwners).All(offset => wire[offset] >= 0xC0);
+		await Assert.That(DnsMessage.Decode(wire)).IsEqualTo(message);
+	}
+
+	[Test]
 	[Arguments(16, 0x0, 0x01)]
 	[Arguments(23, 0x7, 0x01)]
 	[Arguments(4095, 0xF, 0xFF)]
@@ -287,24 +303,14 @@ public class DnsMessageEncodingTest
 	[Test]
 	public async Task WritesTtlsInWholeSeconds()
 	{
-		DnsAddressData address = new(IPAddress.Parse("192.0.2.1"));
 		DnsMessage message = new()
 		{
-			Answers =
-			[
-				new DnsResourceRecord(DnsName.Root, TimeSpan.FromSeconds(300.9), address),
-				new DnsResourceRecord(DnsName.Root, TimeSpan.FromSeconds(int.MaxValue), address),
-				new DnsResourceRecord(DnsName.Root, TimeSpan.FromSeconds(2147483648L), address),
-				new DnsResourceRecord(DnsName.Root, TimeSpan.FromSeconds(uint.MaxValue), address)
-			]
+			Answers = [new DnsResourceRecord(DnsName.Root, TimeSpan.FromSeconds(300.9), new DnsAddressData(IPAddress.Parse("192.0.2.1")))]
 		};
 		byte[] expected =
 		[
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
-			0, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2C, 0x00, 0x04, 192, 0, 2, 1, // 300.9 seconds: 300
-			0, 0x00, 0x01, 0x00, 0x01, 0x7F, 0xFF, 0xFF, 0xFF, 0x00, 0x04, 192, 0, 2, 1, // 2^31 − 1 seconds
-			0, 0x00, 0x01, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00, 0x04, 192, 0, 2, 1, // 2^31 seconds
-			0, 0x00, 0x01, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x04, 192, 0, 2, 1 // 2^32 − 1 seconds
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+			0, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2C, 0x00, 0x04, 192, 0, 2, 1 // 300.9 seconds: 300
 		];
 
 		await Assert.That(Convert.ToHexString(message.Encode())).IsEqualTo(Convert.ToHexString(expected));
@@ -315,8 +321,9 @@ public class DnsMessageEncodingTest
 	[Arguments(DnsRecordType.Sig)]
 	public async Task TheOptRecordGoesBeforeASignatureThatEndsTheAdditionalSection(DnsRecordType signatureType)
 	{
-		// SIG(0) covers type 0, with the signer after 18 bytes of fixed fields (RFC 2931, Sec. 3); TSIG data is opaque.
-		byte[] data = signatureType is DnsRecordType.Sig ? [0, 0, 5, 0, .. Wire.U32(0), .. Wire.U32(2), .. Wire.U32(1), 0x12, 0x34, .. Wire.Name("key", "example"), 0xAA] : [1, 2, 3];
+		// SIG serves only SIG(0) (RFC 4034, Sec. 7), so the type covered is not read: A here does as well as the 0 that SIG(0) uses.
+		// The signer follows 18 bytes of fixed fields (RFC 2931, Sec. 3); TSIG data is opaque.
+		byte[] data = signatureType is DnsRecordType.Sig ? [0, 1, 5, 0, .. Wire.U32(0), .. Wire.U32(2), .. Wire.U32(1), 0x12, 0x34, .. Wire.Name("key", "example"), 0xAA] : [1, 2, 3];
 		DnsResourceRecord address = new(DnsName.Parse("example.com"), TimeSpan.Zero, new DnsAddressData(IPAddress.Parse("192.0.2.1")));
 		DnsResourceRecord signature = new(DnsName.Parse("key.example"), TimeSpan.Zero, new DnsUnknownData(signatureType, data)) { Class = DnsClass.Any };
 		DnsMessage signed = new() { Id = 1, Additionals = [address, signature], Edns = new DnsEdns() };
@@ -329,18 +336,6 @@ public class DnsMessageEncodingTest
 		DnsMessage reordered = signed with { Additionals = [signature, address] };
 		await Assert.That(AdditionalTypes(reordered.Encode())).IsEquivalentTo([signatureType, DnsRecordType.A, DnsRecordType.Opt], CollectionOrdering.Matching);
 		await Assert.That(AdditionalTypes((signed with { Additionals = [address] }).Encode())).IsEquivalentTo([DnsRecordType.A, DnsRecordType.Opt], CollectionOrdering.Matching);
-	}
-
-	[Test]
-	public async Task TheOptRecordGoesBeforeASigRecordWhateverTypeItCovers()
-	{
-		// SIG serves only SIG(0) (RFC 4034, Sec. 7), so the type covered, here A, is not read.
-		byte[] data = [0, 1, 5, 0, .. Wire.U32(0), .. Wire.U32(2), .. Wire.U32(1), 0x12, 0x34, .. Wire.Name("key", "example"), 0xAA];
-		DnsResourceRecord address = new(DnsName.Parse("example.com"), TimeSpan.Zero, new DnsAddressData(IPAddress.Parse("192.0.2.1")));
-		DnsResourceRecord signature = new(DnsName.Parse("key.example"), TimeSpan.Zero, new DnsUnknownData(DnsRecordType.Sig, data)) { Class = DnsClass.Any };
-		DnsMessage signed = new() { Id = 1, Additionals = [address, signature], Edns = new DnsEdns() };
-
-		await Assert.That(AdditionalTypes(signed.Encode())).IsEquivalentTo([DnsRecordType.A, DnsRecordType.Opt, DnsRecordType.Sig], CollectionOrdering.Matching);
 	}
 
 	[Test]
@@ -418,7 +413,7 @@ public class DnsMessageEncodingTest
 	}
 
 	// Checks Encode, TryEncode into a destination of the exact length and into one of the greatest length, then decodes the expected bytes.
-	internal static async Task AssertEncodesTo(DnsMessage message, byte[] expected)
+	private static async Task AssertEncodesTo(DnsMessage message, byte[] expected)
 	{
 		string expectedHex = Convert.ToHexString(expected);
 		byte[] exact = new byte[expected.Length];

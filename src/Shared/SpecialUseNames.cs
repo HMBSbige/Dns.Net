@@ -17,21 +17,6 @@ internal static class SpecialUseNames
 
 	private static readonly DnsName OnionName = DnsName.Parse(Onion);
 
-	public static bool IsInvalid(string name)
-	{
-		return IsReservedName(name, InvalidName, Invalid);
-	}
-
-	public static bool IsLocalhost(string name)
-	{
-		return IsReservedName(name, LocalhostName, Localhost);
-	}
-
-	public static bool IsOnion(string name)
-	{
-		return IsReservedName(name, OnionName, Onion);
-	}
-
 	// For a name already in the ASCII form that a client queries.
 	public static bool IsOnion(DnsName name)
 	{
@@ -39,20 +24,29 @@ internal static class SpecialUseNames
 	}
 
 	// Judged by the labels, so that escapes count as the characters they stand for; a name that does not parse is judged by its text.
-	private static bool IsReservedName(string hostName, DnsName reservedName, string reservedText)
+	// The three are distinct top-level domains, so a name is in at most one of them.
+	public static SpecialUseDomain GetDomain(string hostName)
 	{
-		if (InternationalNames.ToAscii(hostName) is not { } ascii)
-		{
-			return EndsWithReservedName(hostName, reservedText);
-		}
+		// A name that does not convert is not ASCII, so it does not parse either.
+		string ascii = InternationalNames.ToAscii(hostName) ?? hostName;
 
-		return DnsName.TryParse(ascii, out DnsName name) ? name.IsSubdomainOf(reservedName) : EndsWithReservedName(ascii, reservedText);
+		bool parsed = DnsName.TryParse(ascii, out DnsName name);
+
+		return IsIn(InvalidName, Invalid) ? SpecialUseDomain.Invalid
+			: IsIn(LocalhostName, Localhost) ? SpecialUseDomain.Localhost
+			: IsIn(OnionName, Onion) ? SpecialUseDomain.Onion
+			: SpecialUseDomain.None;
+
+		bool IsIn(DnsName domain, string text)
+		{
+			return parsed ? name.IsSubdomainOf(domain) : EndsWithReservedName(ascii, text);
+		}
 	}
 
 	// A name that starts with a dot or has an empty label never matches.
 	private static bool EndsWithReservedName(string hostName, string reservedName)
 	{
-		if (hostName.StartsWith('.') || hostName.Contains("..", StringComparison.Ordinal))
+		if (hostName.StartsWith('.') || hostName.Contains(".."))
 		{
 			return false;
 		}
@@ -66,4 +60,12 @@ internal static class SpecialUseNames
 
 		return name.EndsWith(reservedName, StringComparison.OrdinalIgnoreCase) && (name.Length == reservedName.Length || name[name.Length - reservedName.Length - 1] is '.');
 	}
+}
+
+internal enum SpecialUseDomain
+{
+	None,
+	Invalid,
+	Localhost,
+	Onion
 }

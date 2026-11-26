@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 
 namespace Dns.Net.Abstractions;
@@ -7,7 +8,8 @@ namespace Dns.Net.Abstractions;
 /// Represents an SRV record (RFC 2782), with the addresses of the target that the response carries.
 /// </summary>
 /// <remarks>
-/// The type mirrors <see cref="System.Net.SrvRecord" />. Equality compares the addresses one by one, rather than the lists.
+/// The type mirrors <see cref="System.Net.SrvRecord" />. <see cref="IDnsQueryRecord{TSelf}.CreateRecords" /> keeps the escapes of <see cref="DnsName.ToString" />, except that a name with an <c>xn--</c> label comes back in Unicode, and in lowercase, when <see cref="System.Globalization.IdnMapping" /> converts the whole name, which it does not for a name with an escape, an underscore label or an invalid <c>xn--</c> label.
+/// Equality compares the addresses one by one, rather than the lists.
 /// </remarks>
 /// <param name="Target">The name of the target host; <c>"."</c> says that the service is not available.</param>
 /// <param name="Port">The port of the service on the target host.</param>
@@ -63,14 +65,14 @@ public readonly record struct DnsSrvRecord(string Target, ushort Port, ushort Pr
 		int count = 0;
 
 		// Indexed once for the whole RRset, and only if it has a record to build.
-		Dictionary<DnsName, DnsAddressRecord[]>? addresses = null;
+		Dictionary<DnsName, List<DnsAddressRecord>>? addresses = null;
 
 		foreach (DnsResourceRecord answer in answers)
 		{
 			if (answer.Data is DnsSrvData srv)
 			{
 				addresses ??= IndexAddresses(response.Additionals);
-				records[count++] = new DnsSrvRecord(InternationalNames.ToUnicode(srv.Target), srv.Port, srv.Priority, srv.Weight, ttl, addresses.GetValueOrDefault(srv.Target, []));
+				records[count++] = new DnsSrvRecord(InternationalNames.ToUnicode(srv.Target), srv.Port, srv.Priority, srv.Weight, ttl, addresses.GetValueOrDefault(srv.Target));
 			}
 		}
 
@@ -78,28 +80,47 @@ public readonly record struct DnsSrvRecord(string Target, ushort Port, ushort Pr
 	}
 
 	// Each owner has one list, which its SRV records share.
-	private static Dictionary<DnsName, DnsAddressRecord[]> IndexAddresses(IReadOnlyList<DnsResourceRecord> additionals)
+	private static Dictionary<DnsName, List<DnsAddressRecord>> IndexAddresses(IReadOnlyList<DnsResourceRecord> additionals)
 	{
-		Dictionary<DnsName, List<DnsAddressRecord>> lists = [];
+		Dictionary<DnsName, List<DnsAddressRecord>> addresses = [];
 
 		foreach (DnsResourceRecord additional in additionals)
 		{
-			if (additional is { Class: DnsClass.Internet, Data: DnsAddressData { Address: var address } } && !additional.Name.IsRoot)
+			// A target of "." says that the service is not available (RFC 2782), so the root gets no addresses.
+			if (additional is { Class: DnsClass.Internet, Name.IsRoot: false, Data: DnsAddressData { Address: var address } })
 			{
-				ref List<DnsAddressRecord>? list = ref CollectionsMarshal.GetValueRefOrAddDefault(lists, additional.Name, out _);
+				ref List<DnsAddressRecord>? list = ref CollectionsMarshal.GetValueRefOrAddDefault(addresses, additional.Name, out _);
 				(list ??= []).Add(new DnsAddressRecord(IPAddressCopy.Of(address), additional.Ttl));
 			}
 		}
 
-		Dictionary<DnsName, DnsAddressRecord[]> addresses = new(lists.Count);
-
-		foreach ((DnsName owner, List<DnsAddressRecord> list) in lists)
+		foreach (List<DnsAddressRecord> list in addresses.Values)
 		{
-			DnsAddressRecord[] array = [.. list];
-			RRsetTtl.TakeLeastByFamily(array);
-			addresses.Add(owner, array);
+			TakeLeastTtlByFamily(CollectionsMarshal.AsSpan(list));
 		}
 
 		return addresses;
+	}
+
+	// RFC 2181, Sec. 5.2: the A records and the AAAA records of one owner are separate RRsets.
+	private static void TakeLeastTtlByFamily(Span<DnsAddressRecord> addresses)
+	{
+		TimeSpan v4 = TimeSpan.MaxValue;
+		TimeSpan v6 = TimeSpan.MaxValue;
+
+		foreach (DnsAddressRecord address in addresses)
+		{
+			ref TimeSpan least = ref address.Address.AddressFamily is AddressFamily.InterNetwork ? ref v4 : ref v6;
+
+			if (address.Ttl < least)
+			{
+				least = address.Ttl;
+			}
+		}
+
+		foreach (ref DnsAddressRecord address in addresses)
+		{
+			address = address with { Ttl = address.Address.AddressFamily is AddressFamily.InterNetwork ? v4 : v6 };
+		}
 	}
 }

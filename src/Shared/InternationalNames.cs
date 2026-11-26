@@ -4,11 +4,11 @@ using System.Text;
 
 namespace Dns.Net;
 
-// The IDNA conversion of System.Net.DnsResolver (RFC 5891), shared so that DnsClient and SpecialUseNames see the same name.
+// The IDNA conversion of System.Net.DnsResolver (RFC 5891), shared so that DnsClient, SpecialUseNames and the query records (DnsMxRecord, DnsSrvRecord and others) see names the same way.
 internal static class InternationalNames
 {
 	// The host name rules (RFC 1123) reject an underscore, for one.
-	public static IdnMapping Mapping { get; } = new() { AllowUnassigned = false, UseStd3AsciiRules = true };
+	private static readonly IdnMapping Mapping = new() { UseStd3AsciiRules = true };
 
 	// An ASCII name stays as it is, as the conversion would reject its escapes and underscores; null if the name does not convert.
 	public static string? ToAscii(string name)
@@ -33,7 +33,8 @@ internal static class InternationalNames
 	{
 		string text = name.ToString();
 
-		if (!HasAceLabel(name))
+		// Only an ACE label (RFC 5890) converts. A match after an escaped dot only costs a failed conversion, as the STD3 rules reject the backslash.
+		if (!text.StartsWith("xn--", StringComparison.OrdinalIgnoreCase) && !text.Contains(".xn--", StringComparison.OrdinalIgnoreCase))
 		{
 			return text;
 		}
@@ -45,22 +46,6 @@ internal static class InternationalNames
 		catch (ArgumentException)
 		{
 			return text;
-		}
-
-		static bool HasAceLabel(DnsName name)
-		{
-			Span<byte> encoded = stackalloc byte[DnsName.MaxEncodedLength];
-			_ = name.TryEncode(encoded, out _);
-
-			for (int i = 0; encoded[i] is not 0; i += encoded[i] + 1)
-			{
-				if (encoded[i] >= 4 && Ascii.EqualsIgnoreCase(encoded.Slice(i + 1, 4), "xn--"u8))
-				{
-					return true;
-				}
-			}
-
-			return false;
 		}
 	}
 }

@@ -3,7 +3,7 @@ using System.Net.Sockets;
 
 namespace Dns.Net;
 
-// IPAddress is mutable through ScopeId, so each owner keeps a copy of its own.
+// IPAddress is mutable (ScopeId on IPv6, the obsolete Address setter on IPv4), so each owner keeps a copy of its own.
 internal static class IPAddressCopy
 {
 	public static IPAddress Of(IPAddress address)

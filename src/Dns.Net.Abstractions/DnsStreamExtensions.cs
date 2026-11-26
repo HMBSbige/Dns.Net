@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 
 namespace Dns.Net.Abstractions;
 
@@ -7,6 +8,7 @@ namespace Dns.Net.Abstractions;
 /// Provides the 2-byte length framing of DNS messages on streams, as over TCP, TLS and QUIC (RFC 1035, Sec. 4.2.2).
 /// </summary>
 /// <remarks>
+/// <para>Each write method passes the length and the message to the stream in a single write (RFC 7766, Sec. 8).</para>
 /// <para>None of the methods ends the writing side of the stream, which DNS over QUIC needs after each message (RFC 9250, Sec. 4.2).</para>
 /// <para>A read or write that is canceled or fails may leave part of a frame, after which the stream cannot carry further frames.</para>
 /// </remarks>
@@ -55,7 +57,7 @@ public static class DnsStreamExtensions
 		/// <summary>
 		/// Asynchronously writes the bytes of a message, preceded by their length as a 16-bit big-endian integer.
 		/// </summary>
-		/// <remarks>The length and the bytes go to the stream in a single write (RFC 7766, Sec. 8). The bytes are not checked.</remarks>
+		/// <remarks>The bytes are not checked.</remarks>
 		/// <param name="message">The message in wire format.</param>
 		/// <param name="cancellationToken">The token used to cancel the write.</param>
 		/// <returns>A value task that completes when the stream has accepted the bytes.</returns>
@@ -87,55 +89,41 @@ public static class DnsStreamExtensions
 		}
 	}
 
-	private static async ValueTask WriteMessageAsync(Stream stream, DnsMessage message, CancellationToken cancellationToken)
+	private static ValueTask WriteMessageAsync(Stream stream, DnsMessage message, CancellationToken cancellationToken)
 	{
-		// Copied into a buffer of its own length, so that a write that waits for the peer holds no buffer for the longest message.
 		byte[] encoded = ArrayPool<byte>.Shared.Rent(DnsMessage.MaxEncodedLength);
-		byte[] buffer;
-		int length;
 
 		try
 		{
-			length = DnsMessageCodec.Encode(message, encoded.AsSpan(0, DnsMessage.MaxEncodedLength));
-			buffer = ArrayPool<byte>.Shared.Rent(LengthPrefixLength + length);
-			encoded.AsSpan(0, length).CopyTo(buffer.AsSpan(LengthPrefixLength));
+			int length = DnsMessageCodec.Encode(message, encoded.AsSpan(0, DnsMessage.MaxEncodedLength));
+
+			// WriteFrameAsync copies the bytes into a frame of their own length before its first await, so encoded goes back at once
+			// and a write that waits for the peer holds no buffer for the longest message.
+			return WriteFrameAsync(stream, encoded.AsMemory(0, length), cancellationToken);
 		}
 		finally
 		{
 			ArrayPool<byte>.Shared.Return(encoded);
 		}
-
-		try
-		{
-			await WritePrefixedAsync(stream, buffer, length, cancellationToken).ConfigureAwait(false);
-		}
-		finally
-		{
-			ArrayPool<byte>.Shared.Return(buffer);
-		}
 	}
 
 	private static async ValueTask WriteFrameAsync(Stream stream, ReadOnlyMemory<byte> message, CancellationToken cancellationToken)
 	{
-		byte[] buffer = ArrayPool<byte>.Shared.Rent(LengthPrefixLength + message.Length);
+		byte[] frame = ArrayPool<byte>.Shared.Rent(LengthPrefixLength + message.Length);
 
 		try
 		{
-			message.Span.CopyTo(buffer.AsSpan(LengthPrefixLength));
-			await WritePrefixedAsync(stream, buffer, message.Length, cancellationToken).ConfigureAwait(false);
+			BinaryPrimitives.WriteUInt16BigEndian(frame, (ushort)message.Length);
+			message.Span.CopyTo(frame.AsSpan(LengthPrefixLength));
+			await stream.WriteAsync(frame.AsMemory(0, LengthPrefixLength + message.Length), cancellationToken).ConfigureAwait(false);
 		}
 		finally
 		{
-			ArrayPool<byte>.Shared.Return(buffer);
+			ArrayPool<byte>.Shared.Return(frame);
 		}
 	}
 
-	private static ValueTask WritePrefixedAsync(Stream stream, byte[] buffer, int length, CancellationToken cancellationToken)
-	{
-		BinaryPrimitives.WriteUInt16BigEndian(buffer, (ushort)length);
-		return stream.WriteAsync(buffer.AsMemory(0, LengthPrefixLength + length), cancellationToken);
-	}
-
+	[AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 	private static async ValueTask<DnsMessage?> ReadMessageAsync(Stream stream, CancellationToken cancellationToken)
 	{
 		if (await ReadLengthAsync(stream, cancellationToken).ConfigureAwait(false) is not { } length)
@@ -156,6 +144,7 @@ public static class DnsStreamExtensions
 		}
 	}
 
+	[AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 	private static async ValueTask<byte[]?> ReadFrameAsync(Stream stream, CancellationToken cancellationToken)
 	{
 		if (await ReadLengthAsync(stream, cancellationToken).ConfigureAwait(false) is not { } length)
@@ -168,6 +157,7 @@ public static class DnsStreamExtensions
 		return frame;
 	}
 
+	[AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
 	private static async ValueTask<int?> ReadLengthAsync(Stream stream, CancellationToken cancellationToken)
 	{
 		// In a buffer of its own, so that a read that waits on an idle connection holds no buffer for a whole message.
@@ -184,7 +174,7 @@ public static class DnsStreamExtensions
 
 			if (read < LengthPrefixLength)
 			{
-				ThrowHelper.ThrowTruncatedStream();
+				throw new EndOfStreamException("The stream ended inside a message.");
 			}
 
 			return BinaryPrimitives.ReadUInt16BigEndian(prefix);
