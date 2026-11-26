@@ -10,7 +10,12 @@ env:
   NET_VERSION: 11.0.x
 
 jobs:
+  # Packages on nuget.org cannot be deleted, so nothing is published from a commit that fails CI.
+  ci:
+    uses: ./.github/workflows/CI.yml
+
   pack:
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       id-token: write
