@@ -6,16 +6,19 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/HMBSbige/Dns.Net</PackageProjectUrl>
     <RepositoryUrl>https://github.com/HMBSbige/Dns.Net</RepositoryUrl>
-    <PackageTags>dns</PackageTags>
 
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
 
     <DebugType>embedded</DebugType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)../README.md" Pack="true" PackagePath="" />
+    <InternalsVisibleTo Include="Dns.Net.Tests" />
+    <Compile Include="$(MSBuildThisFileDirectory)Shared/*.cs" LinkBase="Shared" />
   </ItemGroup>
 </Project>

@@ -3,17 +3,8 @@
   <Import Project="../Package.props" />
 
   <PropertyGroup>
-    <IsPackable>true</IsPackable>
-    <Description>Abstractions for Dns.Net: the DNS message model and its wire format (RFC 1035) with EDNS, the transport and server handler contracts, and the query client contract IDnsClient with results shaped like System.Net.DnsResult.</Description>
+    <Description>Abstractions for Dns.Net: the DNS message model, wire format, and client and transport contracts.</Description>
     <PackageTags>dns;dns-client;dns-server;dns-message;rfc1035;edns;resolver</PackageTags>
   </PropertyGroup>
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="Dns.Net.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
-  </ItemGroup>
 
 </Project>
